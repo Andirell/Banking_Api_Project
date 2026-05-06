@@ -1,0 +1,1425 @@
+openapi: 3.0.3
+info:
+  title: Fintech Application API
+  version: 1.0.0
+  description: A list of all my endpoints for my fintech application.
+paths:
+  /api/schema/:
+    get:
+      operationId: api_schema_retrieve
+      description: |-
+        OpenApi3 schema for this API. Format can be selected via content negotiation.
+
+        - YAML: application/vnd.oai.openapi
+        - JSON: application/vnd.oai.openapi+json
+      parameters:
+      - in: query
+        name: format
+        schema:
+          type: string
+          enum:
+          - json
+          - yaml
+      - in: query
+        name: lang
+        schema:
+          type: string
+          enum:
+          - af
+          - ar
+          - ar-dz
+          - ast
+          - az
+          - be
+          - bg
+          - bn
+          - br
+          - bs
+          - ca
+          - ckb
+          - cs
+          - cy
+          - da
+          - de
+          - dsb
+          - el
+          - en
+          - en-au
+          - en-gb
+          - eo
+          - es
+          - es-ar
+          - es-co
+          - es-mx
+          - es-ni
+          - es-ve
+          - et
+          - eu
+          - fa
+          - fi
+          - fr
+          - fy
+          - ga
+          - gd
+          - gl
+          - he
+          - hi
+          - hr
+          - hsb
+          - ht
+          - hu
+          - hy
+          - ia
+          - id
+          - ig
+          - io
+          - is
+          - it
+          - ja
+          - ka
+          - kab
+          - kk
+          - km
+          - kn
+          - ko
+          - ky
+          - lb
+          - lt
+          - lv
+          - mk
+          - ml
+          - mn
+          - mr
+          - ms
+          - my
+          - nb
+          - ne
+          - nl
+          - nn
+          - os
+          - pa
+          - pl
+          - pt
+          - pt-br
+          - ro
+          - ru
+          - sk
+          - sl
+          - sq
+          - sr
+          - sr-latn
+          - sv
+          - sw
+          - ta
+          - te
+          - tg
+          - th
+          - tk
+          - tr
+          - tt
+          - udm
+          - ug
+          - uk
+          - ur
+          - uz
+          - vi
+          - zh-hans
+          - zh-hant
+      tags:
+      - api
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/vnd.oai.openapi:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/yaml:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/vnd.oai.openapi+json:
+              schema:
+                type: object
+                additionalProperties: {}
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /transactions/:
+    get:
+      operationId: transactions_list
+      description: List transactions where the authenticated user is the sender or
+        receiver. Supports filtering by transaction_type and status.
+      summary: List my transactions
+      tags:
+      - Transactions
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Transaction'
+          description: ''
+  /transactions/{id}/:
+    get:
+      operationId: transactions_retrieve
+      description: Retrieve a single transaction if the authenticated user is involved
+        in it.
+      summary: Get transaction detail
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+        required: true
+      tags:
+      - Transactions
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+          description: ''
+  /transactions/deposit/:
+    post:
+      operationId: transactions_deposit_create
+      description: Deposit money into the authenticated user's balance.
+      summary: Deposit money
+      tags:
+      - Transactions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Deposit'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Deposit'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Deposit'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionActionResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionValidationErrorResponse'
+          description: ''
+  /transactions/transfer/:
+    post:
+      operationId: transactions_transfer_create
+      description: Transfer money from the authenticated user to another user by email.
+      summary: Transfer money
+      tags:
+      - Transactions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Transfer'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Transfer'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Transfer'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionActionResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionErrorResponse'
+          description: ''
+  /transactions/withdraw/:
+    post:
+      operationId: transactions_withdraw_create
+      description: Withdraw money from the authenticated user's balance.
+      summary: Withdraw money
+      tags:
+      - Transactions
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Withdraw'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Withdraw'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Withdraw'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionActionResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionErrorResponse'
+          description: ''
+  /users/block/{id}/:
+    patch:
+      operationId: users_block_partial_update
+      description: Deactivate a user account. Admin only.
+      summary: Block user
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Admin
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /users/change-password/:
+    post:
+      operationId: users_change_password_create
+      description: Change the authenticated user's password.
+      summary: Change password
+      tags:
+      - Authentication
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /users/delete/:
+    delete:
+      operationId: users_delete_destroy
+      description: Delete the authenticated user's account.
+      summary: Delete current user
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+  /users/kyc/admin/approve/{user_id}/:
+    post:
+      operationId: users_kyc_admin_approve_create
+      description: Allow admins to approve or reject KYC documents submitted by users.
+      summary: Admin approve/reject KYC
+      parameters:
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Admin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/User'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/User'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /users/kyc/submit/:
+    post:
+      operationId: users_kyc_submit_create
+      description: Allow users to submit their KYC documents (identity proof and proof
+        of address).
+      summary: Submit KYC documents
+      tags:
+      - Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/User'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/User'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /users/logout/:
+    post:
+      operationId: users_logout_create
+      description: Blacklist the refresh token and log the user out.
+      summary: Logout user
+      tags:
+      - Authentication
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /users/me/:
+    get:
+      operationId: users_me_retrieve
+      description: Retrieve the authenticated user's profile.
+      summary: Get current user
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+          description: ''
+  /users/request-password-reset/:
+    post:
+      operationId: users_request_password_reset_create
+      description: Send a password reset OTP to the user's email.
+      summary: Request password reset
+      tags:
+      - Authentication
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /users/reset-password/:
+    post:
+      operationId: users_reset_password_create
+      description: Reset the user's password after OTP verification.
+      summary: Reset password
+      tags:
+      - Authentication
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /users/send-otp/:
+    post:
+      operationId: users_send_otp_create
+      description: Send a one-time password to the authenticated user's email.
+      summary: Send OTP
+      tags:
+      - OTP
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+  /users/signin/:
+    post:
+      operationId: users_signin_create
+      description: Authenticate a user and return JWT access and refresh tokens.
+      summary: Sign in
+      tags:
+      - Authentication
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignInRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SignInRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SignInRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /users/signup/:
+    post:
+      operationId: users_signup_create
+      description: Create a new user account.
+      summary: Register user
+      tags:
+      - Authentication
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/User'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/User'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+          description: ''
+  /users/unblock/{id}/:
+    patch:
+      operationId: users_unblock_partial_update
+      description: Reactivate a user account. Admin only.
+      summary: Unblock user
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Admin
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /users/update/:
+    put:
+      operationId: users_update_update
+      description: Update the authenticated user's profile. PUT replaces all allowed
+        fields, PATCH updates partially.
+      summary: Update current user
+      tags:
+      - Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUser'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UpdateUser'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UpdateUser'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateUserResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+          description: ''
+    patch:
+      operationId: users_update_partial_update
+      description: Update the authenticated user's profile. PUT replaces all allowed
+        fields, PATCH updates partially.
+      summary: Update current user
+      tags:
+      - Users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUpdateUser'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUpdateUser'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUpdateUser'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateUserResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+          description: ''
+  /users/verify-otp/:
+    post:
+      operationId: users_verify_otp_create
+      description: Verify the OTP previously sent to the authenticated user.
+      summary: Verify OTP
+      tags:
+      - OTP
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OTPRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/OTPRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/OTPRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /users/verify-password-reset-otp/:
+    post:
+      operationId: users_verify_password_reset_otp_create
+      description: Verify the OTP sent for password reset.
+      summary: Verify password reset OTP
+      tags:
+      - Authentication
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyPasswordResetOTPRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VerifyPasswordResetOTPRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VerifyPasswordResetOTPRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /wallets/admin/update/{id}/:
+    put:
+      operationId: wallets_admin_update_update
+      description: Admin can update the wallet balance for any user.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - wallets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Wallet'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Wallet'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Wallet'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+          description: ''
+    patch:
+      operationId: wallets_admin_update_partial_update
+      description: Admin can update the wallet balance for any user.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - wallets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedWallet'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedWallet'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedWallet'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+          description: ''
+  /wallets/create/:
+    post:
+      operationId: wallets_create_create
+      tags:
+      - wallets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Wallet'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Wallet'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Wallet'
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+          description: ''
+  /wallets/details/:
+    get:
+      operationId: wallets_details_retrieve
+      tags:
+      - wallets
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+          description: ''
+  /wallets/update/:
+    put:
+      operationId: wallets_update_update
+      tags:
+      - wallets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Wallet'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Wallet'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Wallet'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+          description: ''
+    patch:
+      operationId: wallets_update_partial_update
+      tags:
+      - wallets
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedWallet'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedWallet'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedWallet'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Wallet'
+          description: ''
+components:
+  schemas:
+    ChangePasswordRequest:
+      type: object
+      properties:
+        old_password:
+          type: string
+        new_password:
+          type: string
+        confirm_password:
+          type: string
+      required:
+      - confirm_password
+      - new_password
+      - old_password
+    Deposit:
+      type: object
+      properties:
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        description:
+          type: string
+      required:
+      - amount
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+      - error
+    ForgotPasswordRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required:
+      - email
+    LogoutRequest:
+      type: object
+      properties:
+        refresh_token:
+          type: string
+      required:
+      - refresh_token
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+      - message
+    OTPRequest:
+      type: object
+      properties:
+        otp:
+          type: string
+      required:
+      - otp
+    PatchedUpdateUser:
+      type: object
+      properties:
+        first_name:
+          type: string
+          maxLength: 50
+        last_name:
+          type: string
+          maxLength: 50
+        phone_number:
+          type: string
+          nullable: true
+          maxLength: 15
+        nationality:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+    PatchedWallet:
+      type: object
+      properties:
+        user:
+          type: string
+          readOnly: true
+        balance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+    ResetPasswordRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        new_password:
+          type: string
+        confirm_password:
+          type: string
+      required:
+      - confirm_password
+      - email
+      - new_password
+    RoleEnum:
+      enum:
+      - customer
+      - merchant
+      - admin
+      type: string
+      description: |-
+        * `customer` - Customer
+        * `merchant` - Merchant
+        * `admin` - Admin
+    SignInRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required:
+      - email
+      - password
+    SignInResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+      required:
+      - access_token
+      - message
+      - refresh_token
+    StatusEnum:
+      enum:
+      - pending
+      - successful
+      - failed
+      type: string
+      description: |-
+        * `pending` - Pending
+        * `successful` - Successful
+        * `failed` - Failed
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        reference:
+          type: string
+          format: uuid
+          readOnly: true
+        sender:
+          type: string
+          readOnly: true
+        receiver:
+          type: string
+          readOnly: true
+        transaction_type:
+          $ref: '#/components/schemas/TransactionTypeEnum'
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        status:
+          $ref: '#/components/schemas/StatusEnum'
+        description:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - amount
+      - created_at
+      - id
+      - receiver
+      - reference
+      - sender
+      - transaction_type
+    TransactionActionResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        balance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        transaction:
+          $ref: '#/components/schemas/Transaction'
+      required:
+      - balance
+      - message
+      - transaction
+    TransactionErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+      - error
+    TransactionTypeEnum:
+      enum:
+      - deposit
+      - withdraw
+      - transfer
+      type: string
+      description: |-
+        * `deposit` - Deposit
+        * `withdraw` - Withdraw
+        * `transfer` - Transfer
+    TransactionValidationErrorResponse:
+      type: object
+      properties:
+        errors:
+          type: object
+          additionalProperties: {}
+      required:
+      - errors
+    Transfer:
+      type: object
+      properties:
+        receiver_email:
+          type: string
+          format: email
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        description:
+          type: string
+      required:
+      - amount
+      - receiver_email
+    UpdateUser:
+      type: object
+      properties:
+        first_name:
+          type: string
+          maxLength: 50
+        last_name:
+          type: string
+          maxLength: 50
+        phone_number:
+          type: string
+          nullable: true
+          maxLength: 15
+        nationality:
+          type: string
+          nullable: true
+        address:
+          type: string
+          nullable: true
+      required:
+      - first_name
+      - last_name
+    UpdateUserResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        user:
+          $ref: '#/components/schemas/UserProfile'
+      required:
+      - message
+      - user
+    User:
+      type: object
+      properties:
+        first_name:
+          type: string
+          maxLength: 50
+        last_name:
+          type: string
+          maxLength: 50
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        phone_number:
+          type: string
+          nullable: true
+          maxLength: 15
+        nationality:
+          type: string
+          nullable: true
+        date_of_birth:
+          type: string
+          format: date
+          nullable: true
+        address:
+          type: string
+          nullable: true
+        bvn:
+          type: string
+          nullable: true
+          maxLength: 11
+        password:
+          type: string
+          writeOnly: true
+        confirm_password:
+          type: string
+          writeOnly: true
+      required:
+      - confirm_password
+      - email
+      - first_name
+      - last_name
+      - password
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        first_name:
+          type: string
+          readOnly: true
+        last_name:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+        phone_number:
+          type: string
+          readOnly: true
+          nullable: true
+        nationality:
+          type: string
+          readOnly: true
+          nullable: true
+        date_of_birth:
+          type: string
+          format: date
+          readOnly: true
+          nullable: true
+        address:
+          type: string
+          readOnly: true
+          nullable: true
+        bvn:
+          type: string
+          readOnly: true
+          nullable: true
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          readOnly: true
+        is_active:
+          type: boolean
+          readOnly: true
+          title: Active
+          description: Designates whether this user should be treated as active. Unselect
+            this instead of deleting accounts.
+      required:
+      - address
+      - bvn
+      - date_of_birth
+      - email
+      - first_name
+      - id
+      - is_active
+      - last_name
+      - nationality
+      - phone_number
+      - role
+    ValidationErrorResponse:
+      type: object
+      properties:
+        errors:
+          type: object
+          additionalProperties: {}
+      required:
+      - errors
+    VerifyPasswordResetOTPRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        otp:
+          type: string
+      required:
+      - email
+      - otp
+    Wallet:
+      type: object
+      properties:
+        user:
+          type: string
+          readOnly: true
+        balance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - user
+    Withdraw:
+      type: object
+      properties:
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        description:
+          type: string
+      required:
+      - amount
+  securitySchemes:
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
