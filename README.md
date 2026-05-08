@@ -1,77 +1,121 @@
-# FinTech Digital Banking API (Learning Edition)
+## Banking API Application ##
+Overview
 
-This repository is a compact FinTech backend built with Django + DRF. It focuses
-on a small set of features useful for a capstone and for learning backend
-concepts:
+The Banking API is a backend service for a Digital Banking System built using Django and Django REST Framework (DRF). This API allows users to interact with the system by creating accounts, managing wallets, making transactions, applying for loans, and more.
 
-- Users (custom User model with email login)
-- Wallets (per-user balances)
-- Transactions (deposit, withdraw, transfer)
-- Loans (apply, admin approve, EMI schedule generation)
-- Analytics (simple fraud detection & flagged transactions)
+## Key Features
 
-Note about anti-fraud code: The historic placeholder app `anti_fraud/` was removed from the
-project and is no longer used. The active fraud detection implementation now lives in the
-`analytics` app (see `analytics/utils.py`). If you deleted `anti_fraud/` locally, it is
-safe — the project uses `analytics` for all fraud/flagging functionality.
+User Authentication: Support for login, registration, and KYC (Know Your Customer) verification.
+Wallet Management: Allows users to create wallets, deposit funds, withdraw funds, and transfer money.
+Transaction Management: Users can perform peer-to-peer transfers and track their transaction history.
+Loan Management: Users can apply for loans and check the status of their applications.
+Admin Management: Admins can approve loans, block users, and monitor fraud activity.
 
-Quick start (macOS, python venv)
+## Features
 
-1. Create and activate the virtualenv (already included as `myenv` here):
+User Features
 
-```bash
-python -m venv myenv
-source myenv/bin/activate
+Registration and Authentication: Users can create accounts and login using JWT tokens.
+KYC Submission: Users can upload identity documents for verification.
+Wallet Management: Create, update, and manage wallet balances.
+Transactions: Transfer funds, deposit, and withdraw.
+Loan Application: Apply for loans and track loan status.
+
+Admin Features
+
+Loan Approval: Admins can approve or reject loan applications.
+Fraud Monitoring: Admins can check for suspicious activities and flag transactions.
+User Management: Admins can block or unblock users.
+
+Tech Stack
+
+Backend: Django + Django REST Framework (DRF)
+Database: PostgreSQL (managed by Render)
+Authentication: JWT (JSON Web Token) + Django OTP for two-factor authentication
+Payments: Stripe / Razorpay (for payment integrations)
+Analytics: Pandas (for fraud detection)
+Hosting: Render (for deployment)
+Security: Django Security Middleware + whitenoise for static file handling
+
+API Endpoints
+
+Authentication & User
+POST /users/signup/ - Register a new user.
+POST /users/signin/ - User login (returns JWT token).
+POST /users/kyc/submit/ - Submit KYC documents for verification.
+POST /users/verify-otp/ - Verify OTP during login.
+
+Wallet
+POST /wallets/create/ - Create a new wallet for the user.
+GET /wallets/details/ - Retrieve the user's wallet balance.
+PUT /wallets/update/ - Update wallet details.
+
+Transactions
+POST /transactions/send/ - Transfer money to another user.
+POST /transactions/withdraw/ - Withdraw money from the user's wallet.
+POST /transactions/deposit/ - Deposit money into the user's wallet.
+GET /transactions/history/ - Retrieve transaction history for the logged-in user.
+GET /transactions/{id}/ - Retrieve details of a specific transaction.
+
+Loan Management
+POST /loans/apply/ - Apply for a loan.
+GET /loans/status/{id}/ - Check the status of a loan application.
+POST /admin/loans/approve/ - Admin approve loan application.
+
+Admin
+GET /admin/dashboard/ - View admin dashboard with key statistics.
+POST /admin/block-user/ - Block a user.
+POST /admin/unblock-user/ - Unblock a user.
+
+Setup and Installation
+
+Follow these steps to get your project up and running locally.
+
+Prerequisites
+
+Make sure you have the following installed:
+
+Python 3.8 or higher
+pip (Python package installer)
+PostgreSQL (for database)
+Git (for cloning the repository)
+
+Clone the Repository
+git clone https://github.com/Andirell/Banking_Api_Project/tree/main/users
+cd your-repository
+
+Create a Virtual Environment
+
+It's recommended to use a virtual environment to manage dependencies.
+python3 -m venv venv
+source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+
+Install Dependencies
+
+Install the required dependencies using pip:
 pip install -r requirements.txt
-```
 
-2. Run migrations and create a superuser:
+Setup the Database
 
-```bash
+Configure your PostgreSQL database in the .env file.
+DB_NAME=your_database_name
+DB_USER=your_database_user
+DB_PASSWORD=your_database_password
+DB_HOST=localhost
+DB_PORT=5432
+
+Run database migrations:
 python manage.py migrate
-python manage.py createsuperuser
-```
 
-3. Run the test suite:
-
-```bash
-python manage.py test
-```
-
-4. Run the dev server:
-
-```bash
+Start the Development Server
 python manage.py runserver
-```
 
-Notes for beginners
+Testing the API
 
-- Look at `transactions/views.py` to understand money operations. Important
-  concepts: `serializer.is_valid(raise_exception=True)`, `transaction.atomic()`,
-  and `select_for_update()`.
-- `analytics/utils.py` contains a simple fraud detector you can extend.
-- We prefer small, readable functions rather than clever one-liners here so the
-  code is easier to follow.
+You can test the endpoints using tools like Postman or Swagger.
 
-If you'd like, I can make the code even more beginner-friendly by:
-- Adding inline `# WHY` comments where complex database or concurrency choices are used.
-- Replacing small helper functions with explicit logic so the steps are easier to trace.
-- Writing a short developer guide that explains how money moves through the system.
-
-Which of these would you like next?
-
-EMI endpoints (quick usage)
-
-After an admin approves a loan the system credits the borrower's wallet and generates EMIs.
-
-- List unpaid EMIs (authenticated):
-  GET /loans/emis/ -> returns unpaid EMIs for current user
-
-- Pay an EMI (authenticated):
-  POST /loans/emis/{emi_id}/pay/ -> pays the EMI from the user's wallet
-
-Troubleshooting (common issues)
-
-- Tests failing: run `python manage.py test -v2` to see full trace. If a test fails after changes, run `python manage.py migrate` and re-run tests.
-- Pylance/type warnings about `validated_data` or model attributes: ensure serializers call `is_valid(raise_exception=True)` before using `validated_data`. These warnings are static checks — runtime behavior is correct if tests pass.
-- OpenAPI/schema issues: drf-spectacular may show duplicate inline serializer names if multiple inline serializers are declared separately; reusing central serializer definitions avoids that.# Banking_Api_Project
+Swagger:
+After running the Django server, visit http://127.0.0.1:8000/api/docs/ to see the Swagger UI, where you can interact with the API directly.
+Postman:
+Open Postman and create requests based on the above API endpoint specifications.
+Make sure to include the Authorization header with the JWT token for endpoints that require authentication.
