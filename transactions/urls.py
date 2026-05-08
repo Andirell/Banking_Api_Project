@@ -15,7 +15,6 @@ router.register(r'', TransactionViewSet, basename='transaction')
 urlpatterns = [
     path('deposit/', DepositAPIView.as_view(), name='deposit'),
     path('withdraw/', WithdrawAPIView.as_view(), name='withdraw'),
-    # alias to match project guide: /transactions/send/
     path('send/', TransferAPIView.as_view(), name='send'),
     path('', include(router.urls)),
 ]

@@ -1,17 +1,3 @@
-"""Transactions views
-
-This module implements endpoints for deposits, withdrawals, transfers, and
-transaction listing/detail. The code intentionally uses explicit patterns that
-are easy to follow for beginners: serializers are validated with
-`is_valid(raise_exception=True)`, database updates happen inside
-`transaction.atomic()` and wallets are updated with `select_for_update()` to
-avoid race conditions.
-
-If you're new to Django/DRF, focus on:
-- calling serializer.is_valid(raise_exception=True) before using validated_data
-- wrapping related writes in `with transaction.atomic():` to ensure consistency
-- using `select_for_update()` when mutating balances to prevent lost updates
-"""
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
