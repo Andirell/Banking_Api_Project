@@ -36,6 +36,7 @@ from utils.schemas import (
     VerifyPasswordResetOTPRequest,
     ResetPasswordRequest,
     UpdateUserResponse,
+    VerifySigninOTPRequest,
 )
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -189,17 +190,88 @@ def signin(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
 
-    access = AccessToken.for_user(user)
-    refresh = RefreshToken.for_user(user)
+    # Instead of immediately issuing tokens, generate an OTP and require
+    # the user to verify it. This implements a two-step signin flow.
+    otp_code = generate_otp()
+
+    # Persist OTP in DB
+    try:
+        from .models import OTP
+        OTP.create_for_user(user, otp_code)
+    except Exception:
+        # Fallback to session-based OTP if DB approach fails
+        request.session["otp_code"] = otp_code
+        request.session["otp_expiry"] = time.time() + 300
+
+    # Send OTP via email
+    send_mail(
+        subject="Your sign-in OTP",
+        message=f"Use this OTP to complete sign in: {otp_code}",
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[user.email],
+        fail_silently=True,
+    )
 
     return Response(
         {
-            "message": "sign in successful",
-            "access_token": str(access),
-            "refresh_token": str(refresh),
+            "message": "OTP sent. Verify OTP to complete signin.",
+            "next": "verify_signin_otp",
+            "email": user.email,
         },
-        status=status.HTTP_200_OK
+        status=status.HTTP_200_OK,
     )
+
+
+@extend_schema(
+    summary="Verify signin OTP",
+    description="Verify the OTP for a signin attempt and return JWT tokens.",
+    tags=["Authentication"],
+    request=VerifySigninOTPRequest,
+    responses={200: SignInResponse, 400: ErrorResponse, 401: ErrorResponse},
+)
+@api_view(["POST"])
+@permission_classes([permissions.AllowAny])
+def verify_signin_otp(request):
+    email = request.data.get("email")
+    otp = request.data.get("otp")
+
+    if not email or not otp:
+        return Response({"error": "email and otp are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response({"error": "invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+
+    # First try DB-backed OTPs
+    try:
+        from .models import OTP
+        otp_qs = OTP.objects.filter(user=user, code=otp, is_used=False).order_by('-created_at')
+        otp_obj = otp_qs.first()
+        if otp_obj is None or otp_obj.is_expired():
+            return Response({"error": "invalid or expired otp"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # mark used
+        otp_obj.is_used = True
+        otp_obj.save()
+    except Exception:
+        # Fallback to session-based OTP
+        saved_otp = request.session.get("otp_code")
+        saved_expiry = request.session.get("otp_expiry")
+        if not saved_otp or time.time() > saved_expiry or otp != saved_otp:
+            return Response({"error": "invalid or expired otp"}, status=status.HTTP_400_BAD_REQUEST)
+        request.session.pop("otp_code", None)
+        request.session.pop("otp_expiry", None)
+
+    # Issue tokens
+    access = AccessToken.for_user(user)
+    refresh = RefreshToken.for_user(user)
+
+    return Response({
+        "message": "sign in successful",
+        "access_token": str(access),
+        "refresh_token": str(refresh),
+    }, status=status.HTTP_200_OK)
 
 
 @extend_schema(

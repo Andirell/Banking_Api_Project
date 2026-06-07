@@ -2,6 +2,8 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 from .managers import UserManager
 from decimal import Decimal
+from django.utils import timezone
+from datetime import timedelta
 
 class User(AbstractUser):
     username= None
@@ -27,7 +29,6 @@ class User(AbstractUser):
     phone_number = models.CharField(max_length=15, unique=True, blank=True, null=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="customer")
     kyc_status = models.CharField(max_length=20, choices=KYC_CHOICES, default="pending")
-    balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     created_at = models.DateTimeField(auto_now_add=True)
      # KYC Document Fields
     identity_document = models.ImageField(upload_to="kyc_documents/", blank=True, null=True)  # User's ID document
@@ -45,3 +46,25 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
+
+
+class OTP(models.Model):
+    """One-time password model for login and password reset flows.
+
+    We store OTPs in the database so the login flow can be stateless and
+    work with JWTs (no reliance on Django sessions). An OTP is short-lived
+    and marked used after successful verification.
+    """
+    user = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='otps')
+    code = models.CharField(max_length=10)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_used = models.BooleanField(default=False)
+
+    def is_expired(self) -> bool:
+        return timezone.now() > self.expires_at
+
+    @classmethod
+    def create_for_user(cls, user, code: str, lifetime_seconds: int = 300):
+        expires = timezone.now() + timedelta(seconds=lifetime_seconds)
+        return cls.objects.create(user=user, code=code, expires_at=expires)
