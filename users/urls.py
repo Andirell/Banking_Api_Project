@@ -19,6 +19,8 @@ urlpatterns = [
 
     path("send-otp/", views.send_otp_view, name="send_otp"),
     path("verify-otp/", views.verify_otp_view, name="verify_otp"),
+    # Sign-in OTP verification (no authentication required; used after /signin/)
+    path("verify-signin-otp/", views.verify_signin_otp, name="verify_signin_otp"),
 
     path("request-password-reset/", views.request_password_reset, name="request_password_reset"),
     path("verify-password-reset-otp/", views.verify_password_reset_otp, name="verify_password_reset_otp"),

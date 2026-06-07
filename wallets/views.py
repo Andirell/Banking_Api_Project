@@ -10,7 +10,7 @@ from rest_framework.exceptions import NotFound
 
 from users.views import ErrorResponse
 from .models import Wallet
-from .serializers import WalletSerializer
+from .serializers import WalletSerializer, AdminWalletUpdateSerializer
 from transactions.serializers import (DepositSerializer, WithdrawSerializer, TransferSerializer)
 from rest_framework import serializers
 from drf_spectacular.utils import extend_schema
@@ -83,21 +83,17 @@ class WalletUpdateAPIView(generics.UpdateAPIView):
      
     def perform_update(self, serializer):
         wallet = self.get_object()
-        balance = serializer.validated_data.get("balance", wallet.balance)
-    
-        # Validate balance is not negative
-        if balance < 0:
-            raise ValidationError("Balance cannot be negative.")
-    
-        wallet.balance = balance
-        wallet.save()
+        # Users should not be allowed to update balance directly.
+        # Only admin endpoints should modify balance. If this view is used,
+        # ignore any balance field and return the current wallet state.
+        raise ValidationError("Users are not allowed to modify wallet balance. Use admin endpoints.")
     
 class WalletAdminUpdateAPIView(generics.UpdateAPIView):
     """
     Admin can update the wallet balance for any user.
     """
     queryset = Wallet.objects.all()
-    serializer_class = WalletSerializer
+    serializer_class = AdminWalletUpdateSerializer
     permission_classes = [IsAdminUser]  # Only admins can access this view
 
     @extend_schema(
@@ -114,14 +110,30 @@ class WalletAdminUpdateAPIView(generics.UpdateAPIView):
     def perform_update(self, serializer):
         wallet = self.get_object()
         balance = serializer.validated_data.get("balance", wallet.balance)
-    
-    # Validate balance is not negative
+
+        # Validate balance is not negative
         if balance < 0:
             raise ValidationError("Balance cannot be negative.")
-        
-    
-    # Log the admin's action
+
+        # Log the admin's action
         logger.info(f"Admin updated wallet balance for user {wallet.user.email} to {balance}")
-    
+
+        # Save change and create a Transaction audit record
+        old_balance = wallet.balance
         wallet.balance = balance
-        wallet.save()
+        wallet.save(update_fields=["balance"])
+
+        # Create a transaction record to represent the admin adjustment
+        try:
+            from transactions.models import Transaction
+            Transaction.objects.create(
+                sender=wallet.user,
+                receiver=None,
+                transaction_type='deposit' if balance > old_balance else 'withdraw',
+                amount=abs(balance - old_balance),
+                status='successful',
+                description=f'Admin balance adjustment by {str(self.request.user)}'
+            )
+        except Exception:
+            # Fail silently on audit creation to not block admin workflows
+            logger.exception("Failed to create transaction audit record for admin wallet update")

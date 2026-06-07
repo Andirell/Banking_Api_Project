@@ -110,6 +110,15 @@ OTPRequest = inline_serializer(
     },
 )
 
+# Specific request shape used to verify OTP during signin (contains email + otp)
+VerifySigninOTPRequest = inline_serializer(
+    name="VerifySigninOTPRequest",
+    fields={
+        "email": drf_serializers.EmailField(),
+        "otp": drf_serializers.CharField(),
+    },
+)
+
 ForgotPasswordRequest = inline_serializer(
     name="ForgotPasswordRequest",
     fields={

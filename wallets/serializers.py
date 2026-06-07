@@ -7,7 +7,15 @@ class WalletSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Wallet
+        # Balance is read-only for non-admin users; admins should use AdminWalletUpdateSerializer
         fields = ["user", "balance"]
+        read_only_fields = ["balance"]
+
+
+class AdminWalletUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Wallet
+        fields = ["balance"]
 
 # Optionally, you can add validation for the balance field to prevent negative balance
     def validate_balance(self, value):
