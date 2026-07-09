@@ -17,11 +17,17 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from drf_spectacular.views import ( SpectacularAPIView, SpectacularSwaggerView )
+from django.http import JsonResponse
 from django.conf import settings
 from django.conf.urls.static import static
-from my_fintech_app import settings
+
+
+def health_check(request):
+    return JsonResponse({"status": "ok", "service": "banking-api"})
 
 urlpatterns = [
+    path('', health_check, name="home"),
+    path('health/', health_check, name="health"),
     path('admin/', admin.site.urls),
     path("users/", include("users.urls")),
     path("transactions/", include("transactions.urls")),
