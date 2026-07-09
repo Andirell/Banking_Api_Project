@@ -15,10 +15,6 @@ load_dotenv()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-local-development-key")
-
-# SECURITY WARNING: don't run with debug turned on in production!
 def env_bool(name, default=False):
     value = os.getenv(name)
     if value is None:
@@ -26,7 +22,16 @@ def env_bool(name, default=False):
     return value.lower() in ("1", "true", "yes", "on")
 
 
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env_bool("DEBUG", default=not env_bool("RENDER"))
+
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG is False.")
+    SECRET_KEY = "django-insecure-local-development-key"
 
 ALLOWED_HOSTS = [
     host.strip()
