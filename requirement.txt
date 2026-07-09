@@ -5,10 +5,13 @@ django-filter==25.2
 djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
 drf-spectacular==0.29.0
+dj-database-url>=2.3.0
+gunicorn>=23.0.0
 inflection==0.5.1
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 pillow==12.2.0
+psycopg2-binary>=2.9.10
 PyJWT==2.12.1
 python-dotenv==1.2.2
 PyYAML==6.0.3
@@ -16,3 +19,5 @@ referencing==0.37.0
 rpds-py==0.30.0
 sqlparse==0.5.5
 uritemplate==4.2.0
+uvicorn>=0.34.0
+whitenoise[brotli]>=6.8.2
