@@ -6,7 +6,15 @@ function-based views with `@api_view` for simplicity; feel free to convert
 these to class-based views as you learn DRF.
 """
 
-from rest_framework.decorators import api_view, permission_classes
+import logging
+import os
+
+from django.db import DatabaseError, transaction as db_transaction
+from django.http import FileResponse
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.exceptions import NotFound
 from rest_framework import status, permissions
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.views import APIView
@@ -16,8 +24,17 @@ from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from . import serializers
 from .serializers import KYCSubmitSerializer
-from .models import User
-import random
+from .models import OTP, User
+from .security import (
+    OTPRateLimited,
+    check_otp,
+    consume_otp,
+    generate_otp,
+    issue_otp,
+    revoke_user_tokens,
+)
+from .throttles import OTPRateThrottle
+from loans.models import EMI, LoanApplication
 import time
 from django.conf import settings
 from django.core.mail import send_mail
@@ -48,10 +65,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 
 
 
-# Helpers
-
-def generate_otp():
-    return str(random.randint(100000, 999999))
+logger = logging.getLogger(__name__)
 
 
 
@@ -127,6 +141,29 @@ class KYCAdminApprovalAPIView(APIView):
         return Response({"message": "KYC status updated successfully."}, status=status.HTTP_200_OK)
 
 
+class KYCDocumentDownloadAPIView(APIView):
+    """Stream a KYC document to its owner or to staff. Nobody else can tell it exists."""
+    permission_classes = [IsAuthenticated]
+    DOCUMENT_FIELDS = {"identity": "identity_document", "address": "proof_of_address"}
+
+    @extend_schema(
+        summary="Download KYC document",
+        description="Owner or staff only. `document` is `identity` or `address`.",
+        tags=["Users"],
+        responses={200: None, 404: ErrorResponse},
+    )
+    def get(self, request, user_id, document):
+        field = self.DOCUMENT_FIELDS.get(document)
+        if field is None or (request.user.pk != user_id and not request.user.is_staff):
+            raise NotFound("Document not found.")
+
+        owner = get_object_or_404(User, pk=user_id)
+        file = getattr(owner, field)
+        if not file:
+            raise NotFound("Document not found.")
+        return FileResponse(file.open("rb"), filename=os.path.basename(file.name))
+
+
 
 # Authentication / User Endpoints
 
@@ -192,16 +229,21 @@ def signin(request):
 
     # Instead of immediately issuing tokens, generate an OTP and require
     # the user to verify it. This implements a two-step signin flow.
-    otp_code = generate_otp()
-
-    # Persist OTP in DB
+    # The challenge is stored against this user, so it can only ever log in
+    # this account. If it can't be stored, fail closed: no weaker fallback.
     try:
-        from .models import OTP
-        OTP.create_for_user(user, otp_code)
-    except Exception:
-        # Fallback to session-based OTP if DB approach fails
-        request.session["otp_code"] = otp_code
-        request.session["otp_expiry"] = time.time() + 300
+        otp_code = issue_otp(user, "signin")
+    except OTPRateLimited:
+        return Response(
+            {"error": "too many sign-in codes requested, try again later"},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    except DatabaseError:
+        logger.exception("Could not store sign-in OTP")
+        return Response(
+            {"error": "sign-in is temporarily unavailable"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
     # Send OTP via email
     send_mail(
@@ -231,6 +273,7 @@ def signin(request):
 )
 @api_view(["POST"])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([OTPRateThrottle])
 def verify_signin_otp(request):
     email = request.data.get("email")
     otp = request.data.get("otp")
@@ -238,30 +281,21 @@ def verify_signin_otp(request):
     if not email or not otp:
         return Response({"error": "email and otp are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        user = User.objects.get(email=email)
-    except User.DoesNotExist:
+    user = User.objects.filter(email=email, is_active=True).first()
+    if user is None:
         return Response({"error": "invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
-    # First try DB-backed OTPs
     try:
-        from .models import OTP
-        otp_qs = OTP.objects.filter(user=user, code=otp, is_used=False).order_by('-created_at')
-        otp_obj = otp_qs.first()
-        if otp_obj is None or otp_obj.is_expired():
+        otp_obj = check_otp(user, "signin", otp)
+        # Tokens are issued only by the request that wins the conditional update.
+        if otp_obj is None or not consume_otp(otp_obj.pk):
             return Response({"error": "invalid or expired otp"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # mark used
-        otp_obj.is_used = True
-        otp_obj.save()
-    except Exception:
-        # Fallback to session-based OTP
-        saved_otp = request.session.get("otp_code")
-        saved_expiry = request.session.get("otp_expiry")
-        if not saved_otp or time.time() > saved_expiry or otp != saved_otp:
-            return Response({"error": "invalid or expired otp"}, status=status.HTTP_400_BAD_REQUEST)
-        request.session.pop("otp_code", None)
-        request.session.pop("otp_expiry", None)
+    except DatabaseError:
+        logger.exception("Could not verify sign-in OTP")
+        return Response(
+            {"error": "sign-in is temporarily unavailable"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
     # Issue tokens
     access = AccessToken.for_user(user)
@@ -377,9 +411,12 @@ def change_password(request):
 
     request.user.set_password(new_password)
     request.user.save()
+    # Existing access tokens die with the old password hash (CHECK_REVOKE_TOKEN);
+    # refresh tokens are blacklisted here.
+    revoke_user_tokens(request.user)
 
     return Response(
-        {"message": "password changed successfully"},
+        {"message": "password changed successfully, please sign in again"},
         status=status.HTTP_200_OK
     )
 
@@ -435,9 +472,46 @@ def logout_view(request):
 @api_view(["DELETE"])
 @permission_classes([permissions.IsAuthenticated])
 def delete_user(request):
-    request.user.delete()
+    # Accounts are closed, never hard-deleted: loans, EMIs and transactions
+    # (including other users' transfers) must survive the account.
+    user = request.user
+
+    if EMI.objects.filter(loan__user=user, is_paid=False).exists():
+        return Response(
+            {"error": "account has unpaid loan installments"},
+            status=status.HTTP_409_CONFLICT
+        )
+    if LoanApplication.objects.filter(user=user, status="pending").exists():
+        return Response(
+            {"error": "account has a pending loan application"},
+            status=status.HTTP_409_CONFLICT
+        )
+    wallet = getattr(user, "wallet", None)
+    if wallet is not None and wallet.balance != 0:
+        return Response(
+            {"error": "withdraw your remaining balance before closing the account"},
+            status=status.HTTP_409_CONFLICT
+        )
+
+    with db_transaction.atomic():
+        for document in (user.identity_document, user.proof_of_address):
+            if document:
+                document.delete(save=False)
+        user.email = f"deleted-{user.pk}@deleted.invalid"
+        user.first_name = "Deleted"
+        user.last_name = "User"
+        user.phone_number = None
+        user.bvn = None
+        user.address = None
+        user.date_of_birth = None
+        user.nationality = None
+        user.is_active = False
+        user.set_unusable_password()
+        user.save()
+        revoke_user_tokens(user)
+
     return Response(
-        {"message": "account deleted successfully"},
+        {"message": "account closed successfully"},
         status=status.HTTP_200_OK
     )
 
@@ -615,6 +689,7 @@ def verify_otp_view(request):
 )
 @api_view(["POST"])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([OTPRateThrottle])
 def request_password_reset(request):
     email = request.data.get("email")
 
@@ -624,21 +699,23 @@ def request_password_reset(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
+    # Same answer whether or not the account exists or is over its budget,
+    # so this endpoint can't be used to discover accounts.
+    generic = Response(
+        {"message": "if an account with this email exists, an otp has been sent"},
+        status=status.HTTP_200_OK
+    )
+
+    user = User.objects.filter(email=email, is_active=True).first()
+    if user is None:
+        return generic
+
     try:
-        user = User.objects.get(email=email)
-    except User.DoesNotExist:
-        # Security best practice: don't reveal whether the email exists
-        return Response(
-            {"message": "if an account with this email exists, an otp has been sent"},
-            status=status.HTTP_200_OK
-        )
+        otp = issue_otp(user, "password_reset")
+    except OTPRateLimited:
+        return generic
 
-    otp = generate_otp()
-
-    request.session["password_reset_email"] = user.email
-    request.session["password_reset_otp"] = otp
-    request.session["password_reset_expiry"] = time.time() + 300
-    request.session["password_reset_verified"] = False
+    request.session.pop("password_reset_otp_id", None)
 
     send_mail(
         subject="Password Reset OTP",
@@ -648,10 +725,7 @@ def request_password_reset(request):
         fail_silently=False,
     )
 
-    return Response(
-        {"message": "if an account with this email exists, an otp has been sent"},
-        status=status.HTTP_200_OK
-    )
+    return generic
 
 @extend_schema(
     summary="Verify password reset OTP",
@@ -665,44 +739,32 @@ def request_password_reset(request):
 )
 @api_view(["POST"])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([OTPRateThrottle])
 def verify_password_reset_otp(request):
     email = request.data.get("email")
     otp = request.data.get("otp")
 
-    saved_email = request.session.get("password_reset_email")
-    saved_otp = request.session.get("password_reset_otp")
-    saved_expiry = request.session.get("password_reset_expiry")
-
-    if not saved_email or not saved_otp or not saved_expiry:
+    if not email or not otp:
         return Response(
-            {"error": "no password reset otp found, request a new one"},
+            {"error": "email and otp are required"},
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    if email != saved_email:
+    user = User.objects.filter(email=email, is_active=True).first()
+    otp_obj = check_otp(user, "password_reset", otp) if user else None
+
+    # Record the verification on the challenge itself; it still expires at
+    # its original deadline and is consumed by reset_password.
+    verified = otp_obj is not None and OTP.objects.filter(
+        pk=otp_obj.pk, is_used=False, expires_at__gt=timezone.now()
+    ).update(verified_at=timezone.now()) == 1
+    if not verified:
         return Response(
-            {"error": "invalid email for this otp"},
+            {"error": "invalid or expired otp"},
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    if time.time() > saved_expiry:
-        request.session.pop("password_reset_email", None)
-        request.session.pop("password_reset_otp", None)
-        request.session.pop("password_reset_expiry", None)
-        request.session.pop("password_reset_verified", None)
-
-        return Response(
-            {"error": "otp has expired"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    if otp != saved_otp:
-        return Response(
-            {"error": "invalid otp"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    request.session["password_reset_verified"] = True
+    request.session["password_reset_otp_id"] = otp_obj.pk
 
     return Response(
         {"message": "password reset otp verified successfully"},
@@ -717,18 +779,15 @@ def verify_password_reset_otp(request):
     responses={
         200: MessageResponse,
         400: ErrorResponse,
-        404: ErrorResponse,
     },
 )
 @api_view(["POST"])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([OTPRateThrottle])
 def reset_password(request):
     email = request.data.get("email")
     new_password = request.data.get("new_password")
     confirm_password = request.data.get("confirm_password")
-
-    saved_email = request.session.get("password_reset_email")
-    is_verified = request.session.get("password_reset_verified", False)
 
     if not email or not new_password or not confirm_password:
         return Response(
@@ -736,15 +795,14 @@ def reset_password(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    if email != saved_email:
+    otp_id = request.session.get("password_reset_otp_id")
+    otp_obj = (
+        OTP.objects.select_related("user").filter(pk=otp_id, purpose="password_reset").first()
+        if otp_id else None
+    )
+    if otp_obj is None or otp_obj.user.email != email:
         return Response(
             {"error": "invalid password reset session"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    if not is_verified:
-        return Response(
-            {"error": "otp verification is required before resetting password"},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -754,29 +812,28 @@ def reset_password(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
+    user = otp_obj.user
     try:
-        validate_password(new_password)
+        validate_password(new_password, user)
     except DjangoValidationError as e:
         return Response(
             {"error": e.messages[0]},
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    try:
-        user = User.objects.get(email=email)
-    except User.DoesNotExist:
-        return Response(
-            {"error": "user not found"},
-            status=status.HTTP_404_NOT_FOUND
-        )
+    with db_transaction.atomic():
+        # Single use, verified, and still inside the challenge's deadline.
+        if not consume_otp(otp_obj.pk, purpose="password_reset", verified_at__isnull=False):
+            request.session.pop("password_reset_otp_id", None)
+            return Response(
+                {"error": "password reset has expired, request a new code"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        user.set_password(new_password)
+        user.save()
+        revoke_user_tokens(user)
 
-    user.set_password(new_password)
-    user.save()
-
-    request.session.pop("password_reset_email", None)
-    request.session.pop("password_reset_otp", None)
-    request.session.pop("password_reset_expiry", None)
-    request.session.pop("password_reset_verified", None)
+    request.session.pop("password_reset_otp_id", None)
 
     return Response(
         {"message": "password reset successful"},

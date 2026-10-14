@@ -29,7 +29,10 @@ class TransactionSerializer(serializers.ModelSerializer):
         return value
 
 class DepositSerializer(serializers.Serializer):
+    """Staff-recorded funding. The reference ties the credit to real money received."""
+    user_id = serializers.IntegerField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    funding_reference = serializers.CharField(max_length=100)
     description = serializers.CharField(required=False, allow_blank=True)
 
     def validate_amount(self, value):

@@ -20,12 +20,12 @@ class Transaction(models.Model):
     reference = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     sender = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,  # financial history outlives accounts
         related_name="sent_transactions"
     )
     receiver = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,  # never cascade into another user's records
         related_name="received_transactions",
         null=True,
         blank=True
@@ -36,6 +36,8 @@ class Transaction(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(0.01)])
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     description = models.TextField(blank=True, null=True)
+    # External proof of funding for deposits (bank/payment reference). Unique, so it can't be reused.
+    funding_reference = models.CharField(max_length=100, unique=True, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
