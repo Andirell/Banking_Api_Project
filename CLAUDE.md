@@ -29,6 +29,7 @@ There is no linter configured. Render runs `build.sh` (pip install, collectstati
 - **Debug:** `DEBUG` defaults to on unless `RENDER` is set.
 - **Secret key:** `SECRET_KEY` is resolved by `my_fintech_app/secret_key.py`. Production must set it. Debug runs generate a key and persist it to the gitignored `.dev_secret_key`. The key also signs JWTs.
 - **Email:** the local `.env` points `EMAIL_BACKEND` at real Gmail SMTP. Override it with `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` for manual testing. Creating a user fires a welcome email from `users/signals.py`, and sign-in emails an OTP.
+- **Email on Render:** the free plan blocks outbound SMTP (ports 25/465/587), so production sends through an HTTP API via django-anymail. Set `EMAIL_BACKEND=anymail.backends.<provider>.EmailBackend` plus `ANYMAIL_*` env vars (e.g. `ANYMAIL_BREVO_API_KEY`). `EMAIL_TIMEOUT` (default 10s) stops an unreachable mail server from hanging requests. A failed welcome email is only logged; a failed sign-in OTP email returns 503.
 - **Rate limits:** the anonymous OTP endpoints use `users.throttles.OTPRateThrottle` (`DEFAULT_THROTTLE_RATES["otp"]`). Tests that hit them call `cache.clear()` in `setUp`.
 
 ## Architecture

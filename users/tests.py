@@ -370,3 +370,50 @@ class PasswordResetTests(TestCase):
 
         self.assertEqual(self.reset().status_code, 200)
         self.assertEqual(self.reset().status_code, 400)
+
+
+class EmailFailureTests(TestCase):
+    """Production can't always reach the mail server (e.g. Render free blocks SMTP)."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_signup_succeeds_when_welcome_email_fails(self):
+        with patch("users.signals.send_smtp_mail", side_effect=OSError("smtp unreachable")) as mailer, \
+                self.captureOnCommitCallbacks(execute=True):
+            res = APIClient().post(
+                "/users/signup/",
+                {"first_name": "New", "last_name": "User", "email": "new@example.com",
+                 "password": PASSWORD, "confirm_password": PASSWORD},
+                format="json",
+            )
+
+        self.assertEqual(res.status_code, 201)
+        self.assertTrue(User.objects.filter(email="new@example.com").exists())
+        mailer.assert_called_once()  # the email really was attempted (and failed)
+
+    def test_signin_reports_undeliverable_code(self):
+        make_user("user@example.com")
+        with patch("users.views.send_mail", side_effect=OSError("smtp unreachable")):
+            res = APIClient().post(
+                "/users/signin/", {"email": "user@example.com", "password": PASSWORD}, format="json"
+            )
+
+        self.assertEqual(res.status_code, 503)
+        self.assertFalse(OTP.objects.filter(user__email="user@example.com", is_used=False).exists())
+
+    def test_email_has_a_timeout(self):
+        from django.conf import settings
+
+        self.assertTrue(settings.EMAIL_TIMEOUT)
+
+    @override_settings(EMAIL_BACKEND="anymail.backends.test.EmailBackend")
+    def test_otp_is_delivered_through_an_http_email_api(self):
+        make_user("user@example.com")
+        res = APIClient().post(
+            "/users/signin/", {"email": "user@example.com", "password": PASSWORD}, format="json"
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(mail.outbox[-1].to, ["user@example.com"])
+        self.assertIn(last_emailed_code(), mail.outbox[-1].body)

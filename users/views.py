@@ -245,14 +245,23 @@ def signin(request):
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    # Send OTP via email
-    send_mail(
-        subject="Your sign-in OTP",
-        message=f"Use this OTP to complete sign in: {otp_code}",
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=True,
-    )
+    # If the code can't be delivered the user can't finish signing in, so say
+    # so instead of reporting success, and retire the undeliverable challenge.
+    try:
+        send_mail(
+            subject="Your sign-in OTP",
+            message=f"Use this OTP to complete sign in: {otp_code}",
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except Exception:
+        logger.exception("Could not email sign-in OTP to user %s", user.pk)
+        OTP.objects.filter(user=user, purpose="signin", is_used=False).update(is_used=True)
+        return Response(
+            {"error": "could not send the sign-in code, try again later"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
     return Response(
         {
@@ -717,13 +726,18 @@ def request_password_reset(request):
 
     request.session.pop("password_reset_otp_id", None)
 
-    send_mail(
-        subject="Password Reset OTP",
-        message=f"Your password reset OTP is {otp}. It will expire in 5 minutes.",
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        fail_silently=False,
-    )
+    try:
+        send_mail(
+            subject="Password Reset OTP",
+            message=f"Your password reset OTP is {otp}. It will expire in 5 minutes.",
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except Exception:
+        # Keep the generic answer (no account enumeration); the failure is logged.
+        logger.exception("Could not email password reset OTP to user %s", user.pk)
+        OTP.objects.filter(user=user, purpose="password_reset", is_used=False).update(is_used=True)
 
     return generic
 
