@@ -4,6 +4,7 @@ Django==6.0.3
 django-filter==25.2
 djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
+django-anymail[resend,brevo,sendgrid,mailgun]==15.2
 drf-spectacular==0.29.0
 dj-database-url>=2.3.0
 gunicorn>=23.0.0
