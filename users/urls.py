@@ -8,6 +8,7 @@ urlpatterns = [
     path("me/", views.get_me, name="get_me"),
     path('kyc/submit/', views.KYCSubmitAPIView.as_view(), name='kyc_submit'),  # User submits KYC
     path('kyc/admin/approve/<int:user_id>/', views.KYCAdminApprovalAPIView.as_view(), name='kyc_admin_approve'),  # Admin approves/rejects KYC
+    path('kyc/documents/<int:user_id>/<str:document>/', views.KYCDocumentDownloadAPIView.as_view(), name='kyc_document'),  # Owner or staff only
 
 
     path("update/", views.update_user, name="update_user"),

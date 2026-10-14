@@ -12,12 +12,13 @@ from django.shortcuts import get_object_or_404
 from .models import LoanApplication
 from .serializers import LoanApplicationSerializer, LoanApplyRequestSerializer
 from users.models import User
-from wallets.models import Wallet
+from wallets.services import InsufficientFunds, credit, debit, lock_wallets
 from .utils import create_emis_for_loan
 from rest_framework.views import APIView
 from .models import EMI
 from .serializers import EMIReadSerializer
 from django.db import transaction as db_transaction
+from django.db.models import F
 from transactions.models import Transaction
 from decimal import Decimal
 from drf_spectacular.utils import extend_schema
@@ -75,22 +76,31 @@ def admin_approve_loan(request):
     if not loan_id or action not in ("approve", "reject"):
         return Response({"error": "loan_id and action are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-    loan = get_object_or_404(LoanApplication, pk=loan_id)
+    # One atomic unit: decision, disbursement, ledger entry and schedule. The
+    # loan row is locked so two approvals can't both see "pending".
+    with db_transaction.atomic():
+        loan = get_object_or_404(LoanApplication.objects.select_for_update(), pk=loan_id)
+        if loan.status != "pending":
+            return Response({"error": f"loan is already {loan.status}"}, status=status.HTTP_400_BAD_REQUEST)
 
-    if action == "approve":
-        loan.status = "approved"
-        loan.save()
+        if action == "approve":
+            loan.status = "approved"
+            loan.save(update_fields=["status"])
 
-        # Credit user's wallet (create if missing)
-        wallet, _ = Wallet.objects.get_or_create(user=loan.user, defaults={"balance": 0.00})
-        wallet.balance += loan.amount
-        wallet.save()
-
-        # create EMI schedule
-        create_emis_for_loan(loan)
-    else:
-        loan.status = "rejected"
-        loan.save()
+            (wallet,) = lock_wallets(loan.user_id)
+            credit(wallet, loan.amount)
+            Transaction.objects.create(
+                sender=loan.user,
+                receiver=None,
+                transaction_type="deposit",
+                amount=loan.amount,
+                status="successful",
+                description=f"Loan {loan.pk} disbursement",
+            )
+            create_emis_for_loan(loan)
+        else:
+            loan.status = "rejected"
+            loan.save(update_fields=["status"])
 
     return Response({"message": f"loan {action}d"}, status=status.HTTP_200_OK)
 
@@ -121,29 +131,26 @@ class EMIPayAPIView(APIView):
 
     @extend_schema(request=None, responses={200: EMIPayResponseSerializer, 400: ErrorResponse})
     def post(self, request, emi_id):
-        emi = get_object_or_404(EMI, pk=emi_id)
-        # Ensure emi belongs to the requesting user
-        if emi.loan.user.id != request.user.id:
-            return Response({"detail": "EMI not found."}, status=status.HTTP_404_NOT_FOUND)
+        # Scoping the lookup to the owner means other users' EMIs are simply not found.
+        emi = get_object_or_404(EMI.objects.select_related("loan"), pk=emi_id, loan__user=request.user)
 
         if emi.is_paid:
             return Response({"detail": "EMI already paid."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # atomic update on wallet and emi to avoid races
         with db_transaction.atomic():
-            wallet, _ = Wallet.objects.select_for_update().get_or_create(user=request.user, defaults={"balance": Decimal("0.00")})
+            (wallet,) = lock_wallets(request.user.pk)
 
-            if wallet.balance < emi.amount:
+            # Re-check in the same statement that marks it paid: the is_paid read
+            # above may already be stale if another payment request won.
+            marked = EMI.objects.filter(pk=emi.pk, is_paid=False).update(is_paid=True, paid_amount=F("amount"))
+            if not marked:
+                return Response({"detail": "EMI already paid."}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                debit(wallet, emi.amount)
+            except InsufficientFunds:
+                db_transaction.set_rollback(True)  # undo marking the EMI paid
                 return Response({"detail": "Insufficient funds."}, status=status.HTTP_400_BAD_REQUEST)
-
-            # debit wallet
-            wallet.balance -= emi.amount
-            wallet.save()
-
-            # mark emi paid
-            emi.paid_amount = emi.amount
-            emi.is_paid = True
-            emi.save()
 
             # create a transaction record for bookkeeping
             loan_id_val = getattr(getattr(emi, 'loan', None), 'id', None)

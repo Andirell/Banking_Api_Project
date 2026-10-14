@@ -10,7 +10,7 @@ class LoanApplication(models.Model):
 		("rejected", "Rejected"),
 	)
 
-	user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="loan_applications")
+	user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="loan_applications")
 	amount = models.DecimalField(max_digits=12, decimal_places=2)
 	duration_months = models.IntegerField()
 	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
@@ -23,7 +23,7 @@ class LoanApplication(models.Model):
 
 
 class EMI(models.Model):
-	loan = models.ForeignKey(LoanApplication, on_delete=models.CASCADE, related_name="emis")
+	loan = models.ForeignKey(LoanApplication, on_delete=models.PROTECT, related_name="emis")
 	due_date = models.DateField()
 	amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
 	paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))

@@ -4,6 +4,7 @@ from .managers import UserManager
 from decimal import Decimal
 from django.utils import timezone
 from datetime import timedelta
+from .storage import private_kyc_storage
 
 class User(AbstractUser):
     username= None
@@ -31,8 +32,8 @@ class User(AbstractUser):
     kyc_status = models.CharField(max_length=20, choices=KYC_CHOICES, default="pending")
     created_at = models.DateTimeField(auto_now_add=True)
      # KYC Document Fields
-    identity_document = models.ImageField(upload_to="kyc_documents/", blank=True, null=True)  # User's ID document
-    proof_of_address = models.ImageField(upload_to="kyc_documents/", blank=True, null=True)  # Address proof document
+    identity_document = models.ImageField(upload_to="kyc_documents/", storage=private_kyc_storage, blank=True, null=True)  # User's ID document
+    proof_of_address = models.ImageField(upload_to="kyc_documents/", storage=private_kyc_storage, blank=True, null=True)  # Address proof document
     # Admin KYC Approval Fields
     kyc_approved = models.BooleanField(default=False)  # Tracks whether KYC is approved
     kyc_rejection_reason = models.TextField(blank=True, null=True)  # Reason for rejection
@@ -55,16 +56,24 @@ class OTP(models.Model):
     work with JWTs (no reliance on Django sessions). An OTP is short-lived
     and marked used after successful verification.
     """
+    PURPOSE_CHOICES = (
+        ("signin", "Sign in"),
+        ("password_reset", "Password reset"),
+    )
+
     user = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='otps')
+    purpose = models.CharField(max_length=20, choices=PURPOSE_CHOICES, default="signin")
     code = models.CharField(max_length=10)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     is_used = models.BooleanField(default=False)
+    attempts = models.PositiveSmallIntegerField(default=0)  # failed guesses against this challenge
+    verified_at = models.DateTimeField(blank=True, null=True)  # password reset: code checked, reset not done yet
 
     def is_expired(self) -> bool:
         return timezone.now() > self.expires_at
 
     @classmethod
-    def create_for_user(cls, user, code: str, lifetime_seconds: int = 300):
+    def create_for_user(cls, user, code: str, purpose: str = "signin", lifetime_seconds: int = 300):
         expires = timezone.now() + timedelta(seconds=lifetime_seconds)
-        return cls.objects.create(user=user, code=code, expires_at=expires)
+        return cls.objects.create(user=user, code=code, purpose=purpose, expires_at=expires)

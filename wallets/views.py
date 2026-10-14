@@ -1,7 +1,6 @@
-#from django.db import transaction as db_transaction
-from asyncio.log import logger
 import logging
-from django.forms import ValidationError
+from django.db import transaction as db_transaction
+from rest_framework.exceptions import ValidationError
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -16,6 +15,10 @@ from rest_framework import serializers
 from drf_spectacular.utils import extend_schema
 from utils.schemas import WalletDetailResponse, WalletCreateResponse, WalletUpdateResponse, ErrorResponse
 from rest_framework.permissions import IsAdminUser
+from transactions.models import Transaction
+from .services import lock_wallets
+
+logger = logging.getLogger(__name__)
 
 
 # Swagger/OpenAPI Response Schemas
@@ -108,32 +111,32 @@ class WalletAdminUpdateAPIView(generics.UpdateAPIView):
     )
    
     def perform_update(self, serializer):
-        wallet = self.get_object()
+        wallet = serializer.instance
         balance = serializer.validated_data.get("balance", wallet.balance)
 
         # Validate balance is not negative
         if balance < 0:
             raise ValidationError("Balance cannot be negative.")
 
-        # Log the admin's action
-        logger.info(f"Admin updated wallet balance for user {wallet.user.email} to {balance}")
+        # Lock the row so the old balance (and the audit amount) is the real
+        # current value, and commit the change and its audit record together:
+        # if the audit can't be written, the balance change rolls back.
+        with db_transaction.atomic():
+            (locked,) = lock_wallets(wallet.user_id)
+            old_balance = locked.balance
+            if balance == old_balance:
+                return
+            locked.balance = balance
+            locked.save(update_fields=["balance"])
 
-        # Save change and create a Transaction audit record
-        old_balance = wallet.balance
-        wallet.balance = balance
-        wallet.save(update_fields=["balance"])
-
-        # Create a transaction record to represent the admin adjustment
-        try:
-            from transactions.models import Transaction
             Transaction.objects.create(
-                sender=wallet.user,
+                sender=locked.user,
                 receiver=None,
                 transaction_type='deposit' if balance > old_balance else 'withdraw',
                 amount=abs(balance - old_balance),
                 status='successful',
-                description=f'Admin balance adjustment by {str(self.request.user)}'
+                description=f'Admin balance adjustment by {self.request.user}'
             )
-        except Exception:
-            # Fail silently on audit creation to not block admin workflows
-            logger.exception("Failed to create transaction audit record for admin wallet update")
+
+        logger.info("Admin %s set wallet %s balance %s -> %s", self.request.user.pk, wallet.pk, old_balance, balance)
+        wallet.refresh_from_db(fields=["balance"])

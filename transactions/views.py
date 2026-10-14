@@ -1,9 +1,9 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework import status, generics
 from rest_framework.viewsets import ReadOnlyModelViewSet
-from django.db import transaction as db_transaction
+from django.db import IntegrityError, transaction as db_transaction
 from users.models import User
 from decimal import Decimal
 from typing import Any, Dict, cast, TYPE_CHECKING
@@ -17,57 +17,58 @@ from drf_spectacular.types import OpenApiTypes
 from utils.schemas import TransactionActionResponse, ErrorResponse, ValidationErrorResponse
 from rest_framework import serializers
 from rest_framework.exceptions import NotFound
-from analytics.utils import simple_flagTransaction
+from analytics.utils import flag_transaction_safely
+from wallets.services import InsufficientFunds, credit, debit, lock_wallets
 import logging
 logger = logging.getLogger(__name__)  # Set up logging
 
 class DepositAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    # Customers can't credit themselves: a deposit is staff recording money that
+    # actually arrived, identified by a funding reference that can't be reused.
+    permission_classes = [IsAdminUser]
 
     @extend_schema(
-        summary="Deposit money",
-        description="Deposit money into the authenticated user's balance.",
+        summary="Record a deposit (staff)",
+        description="Credit a user's wallet for funds received externally. Requires a unique funding reference.",
         tags=["Transactions"],
         request=DepositSerializer,
         responses={
             201: TransactionActionResponse,
             400: ValidationErrorResponse,
+            409: ErrorResponse,
         },
     )
     def post(self, request):
         serializer = DepositSerializer(data=request.data)
-        # validate and raise a proper exception for invalid input
         serializer.is_valid(raise_exception=True)
         validated: Dict[str, Any] = cast(Dict[str, Any], serializer.validated_data)
 
         amount: Decimal = validated["amount"]
-        description: str = validated.get("description", "")
+        reference: str = validated["funding_reference"]
+        owner = User.objects.filter(pk=validated["user_id"], is_active=True).first()
+        if owner is None:
+            return Response({"error": "User not found."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if amount <= 0:
-            return Response({"error": "Amount must be greater than zero."}, status=status.HTTP_400_BAD_REQUEST)
+        if Transaction.objects.filter(funding_reference=reference).exists():
+            return Response({"error": "This funding reference has already been used."}, status=status.HTTP_409_CONFLICT)
 
-        with db_transaction.atomic():
-            user = User.objects.select_for_update().get(pk=request.user.pk)
-
-            wallet = user.wallet  # type: ignore
-            wallet.balance += amount
-            wallet.save(update_fields=["balance"])
-
-            transaction_obj = Transaction.objects.create(
-                sender=user,
-                receiver=None,
-                transaction_type="deposit",
-                amount=amount,
-                status="successful",
-                description=description,
-            )
-
-            # Run a simple fraud detector and persist any flagged activity
-            try:
-                simple_flagTransaction(transaction_obj)
-            except Exception:
-                # don't let analytics failures interrupt transactions
-                pass
+        try:
+            with db_transaction.atomic():
+                (wallet,) = lock_wallets(owner.pk)
+                credit(wallet, amount)
+                transaction_obj = Transaction.objects.create(
+                    sender=owner,
+                    receiver=None,
+                    transaction_type="deposit",
+                    amount=amount,
+                    status="successful",
+                    funding_reference=reference,
+                    description=validated.get("description") or f"Deposit recorded by {request.user}",
+                )
+                flag_transaction_safely(transaction_obj)
+        except IntegrityError:
+            # Lost a race with another request using the same reference; nothing was credited.
+            return Response({"error": "This funding reference has already been used."}, status=status.HTTP_409_CONFLICT)
 
         return Response(
             {
@@ -100,36 +101,22 @@ class WithdrawAPIView(APIView):
         amount: Decimal = validated["amount"]
         description: str = validated.get("description", "")
 
-        if amount <= 0:
-            return Response({"error": "Amount must be greater than zero."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # We use an atomic block to ensure the balance check and update are
-        # performed together. `select_for_update()` locks the user row until
-        # the transaction completes so concurrent withdrawals don't corrupt the balance.
         with db_transaction.atomic():
-            user = User.objects.select_for_update().get(pk=request.user.pk)
-
-            wallet = user.wallet  # type: ignore
-            if wallet.balance < amount:
+            (wallet,) = lock_wallets(request.user.pk)
+            try:
+                debit(wallet, amount)
+            except InsufficientFunds:
                 return Response({"error": "Insufficient funds."}, status=status.HTTP_400_BAD_REQUEST)
 
-        
-            wallet.balance -= amount
-            wallet.save(update_fields=["balance"])
-
             transaction_obj = Transaction.objects.create(
-                sender=user,
+                sender=request.user,
                 receiver=None,
                 transaction_type="withdraw",
                 amount=amount,
                 status="successful",
                 description=description,
             )
-
-            try:
-                simple_flagTransaction(transaction_obj)
-            except Exception:
-                pass
+            flag_transaction_safely(transaction_obj)
 
         return Response(
             {
@@ -158,72 +145,47 @@ class TransferAPIView(APIView):
     )
     def post(self, request):
         serializer = TransferSerializer(data=request.data, context={"request": request})
-        
-        # Check if serializer is valid
+
         if not serializer.is_valid():
-            logger.error(f"TransferSerializer errors: {serializer.errors}")
             return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         validated = serializer.validated_data
-        receiver_email = validated["receiver_email"]
         amount = validated["amount"]
         description = validated.get("description", "")
 
-        # Ensure the transfer amount is greater than zero
-        if amount <= 0:
-            logger.error(f"Invalid transfer amount: {amount}")
-            return Response({"error": "Amount must be greater than zero."}, status=status.HTTP_400_BAD_REQUEST)
+        receiver = User.objects.filter(email=validated["receiver_email"], is_active=True).first()
+        if receiver is None:
+            return Response({"error": "Receiver not found."}, status=status.HTTP_400_BAD_REQUEST)
+        if receiver.pk == request.user.pk:
+            return Response({"error": "You cannot transfer to yourself."}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            with db_transaction.atomic():
-                # Lock both sender and receiver to avoid race conditions
-                sender = User.objects.select_for_update().get(pk=request.user.pk)
-                receiver = User.objects.select_for_update().get(email=receiver_email)
+        with db_transaction.atomic():
+            sender_wallet, receiver_wallet = lock_wallets(request.user.pk, receiver.pk)
+            try:
+                debit(sender_wallet, amount)
+            except InsufficientFunds:
+                return Response({"error": "Insufficient funds."}, status=status.HTTP_400_BAD_REQUEST)
+            credit(receiver_wallet, amount)
 
-                # Log sender and receiver details
-                logger.info(f"Sender: {sender.email}, Receiver: {receiver.email}, Amount: {amount}")
+            transaction_obj = Transaction.objects.create(
+                sender=request.user,
+                receiver=receiver,
+                transaction_type="transfer",
+                amount=amount,
+                status="successful",
+                description=description,
+            )
+            flag_transaction_safely(transaction_obj)
 
-                # Prevent sender from transferring to themselves
-                if sender.id == receiver.id:
-                    logger.error(f"Sender cannot transfer to themselves. Sender ID: {sender.id} - Receiver ID: {receiver.id}")
-                    return Response({"error": "You cannot transfer to yourself."}, status=status.HTTP_400_BAD_REQUEST)
-
-                # Check if sender has enough funds
-                if sender.wallet.balance < amount:
-                    logger.error(f"Insufficient funds: {sender.wallet.balance} < {amount}")
-                    return Response({"error": "Insufficient funds."}, status=status.HTTP_400_BAD_REQUEST)
-
-                # Update sender and receiver wallets
-                sender.wallet.balance -= amount
-                receiver.wallet.balance += amount
-
-                # Save the updated wallet balances
-                sender.wallet.save(update_fields=["balance"])
-                receiver.wallet.save(update_fields=["balance"])
-
-                # Create transaction record
-                transaction_obj = Transaction.objects.create(
-                    sender=sender,
-                    receiver=receiver,
-                    transaction_type="transfer",
-                    amount=amount,
-                    status="successful",
-                    description=description,
-                )
-
-                logger.info(f"Transaction created: {transaction_obj.id}, Amount: {amount}, Status: {transaction_obj.status}")
-
-                return Response(
-                    {
-                        "message": "Transfer successful",
-                        "balance": sender.wallet.balance,
-                        "transaction": TransactionSerializer(transaction_obj).data,
-                    },
-                    status=status.HTTP_201_CREATED,
-                )
-        except Exception as e:
-            logger.error(f"Error during transfer: {str(e)}")
-            return Response({"error": "Internal Server Error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.info("Transfer %s: %s -> %s, amount %s", transaction_obj.reference, request.user.pk, receiver.pk, amount)
+        return Response(
+            {
+                "message": "Transfer successful",
+                "balance": sender_wallet.balance,
+                "transaction": TransactionSerializer(transaction_obj).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 # 4. Transaction History View

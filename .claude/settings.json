@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Edit(**)",
+      "Bash(myenv/bin/python manage.py test*)",
+      "Bash(myenv/bin/python manage.py migrate*)",
+      "Bash(myenv/bin/python manage.py makemigrations*)",
+      "Bash(myenv/bin/python manage.py check*)",
+      "Bash(myenv/bin/python manage.py runserver*)",
+      "Bash(myenv/bin/python manage.py spectacular*)",
+      "Bash(myenv/bin/pip install*)",
+      "Bash(./build.sh)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)"
+    ],
+    "ask": [
+      "Bash(git push*)",
+      "Bash(git filter-repo*)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/*.env)",
+      "Read(**/.dev_secret_key)",
+      "Edit(**/.env)",
+      "Edit(**/.env.*)",
+      "Edit(**/*.env)",
+      "Edit(**/.dev_secret_key)",
+      "Bash(cat *.env*)",
+      "Bash(cat .env*)",
+      "Bash(less .env*)",
+      "Bash(more .env*)",
+      "Bash(head .env*)",
+      "Bash(tail .env*)",
+      "Bash(grep * .env*)",
+      "Bash(sed * .env*)",
+      "Bash(cat *.dev_secret_key*)",
+      "Bash(printenv*)",
+      "Bash(env)"
+    ]
+  }
+}
