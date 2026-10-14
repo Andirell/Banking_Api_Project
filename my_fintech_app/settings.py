@@ -208,4 +208,15 @@ EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", default=True)
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD") or os.getenv("APP_PASSWORD")
+# Without a timeout an unreachable mail server (e.g. Render free blocks SMTP) hangs the request.
+EMAIL_TIMEOUT = int(os.getenv("EMAIL_TIMEOUT", 10))
+
+# HTTP email APIs via django-anymail, for hosts that block SMTP (Render free).
+# Set EMAIL_BACKEND to e.g. "anymail.backends.brevo.EmailBackend" and pass the
+# provider settings as ANYMAIL_* env vars, e.g. ANYMAIL_BREVO_API_KEY=...
+ANYMAIL = {
+    name[len("ANYMAIL_"):]: value
+    for name, value in os.environ.items()
+    if name.startswith("ANYMAIL_")
+}
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "webmaster@localhost")
