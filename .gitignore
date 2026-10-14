@@ -4,3 +4,8 @@
 .env
 .remove_anti_fraud_marker
 __pycache__/
+# Secrets, user uploads and local data must never be committed
+.dev_secret_key
+db.sqlite3
+media/
+private_media/

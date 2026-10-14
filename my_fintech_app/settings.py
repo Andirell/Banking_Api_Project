@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import os
 from datetime import timedelta
 from django.core.exceptions import ImproperlyConfigured
+from my_fintech_app.secret_key import resolve_secret_key
 
 try:
     import dj_database_url
@@ -22,16 +23,12 @@ def env_bool(name, default=False):
     return value.lower() in ("1", "true", "yes", "on")
 
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv("SECRET_KEY")
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env_bool("DEBUG", default=not env_bool("RENDER"))
 
-if not SECRET_KEY:
-    if not DEBUG:
-        raise ImproperlyConfigured("SECRET_KEY must be set when DEBUG is False.")
-    SECRET_KEY = "django-insecure-local-development-key"
+# SECURITY WARNING: keep the secret key used in production secret!
+# It also signs JWTs, so there is deliberately no hard-coded fallback.
+SECRET_KEY = resolve_secret_key(os.getenv("SECRET_KEY"), DEBUG, BASE_DIR / ".dev_secret_key")
 
 ALLOWED_HOSTS = [
     host.strip()
@@ -103,6 +100,9 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated'  # Makes all endpoints or URLs protected
     ],
+    'DEFAULT_THROTTLE_RATES': {
+        'otp': '10/minute',  # Per-IP limit on anonymous OTP endpoints (see users.throttles)
+    },
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema'
 }
 
@@ -128,7 +128,8 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),  # Set expiration for refresh token
     'SIGNING_KEY': SECRET_KEY,  # Your Django key to give the token a unique signature or to sign the token
     'AUTH_HEADER_TYPES': ('Bearer',),  # The type of authorization header. It is the label of the token
-    'ALGORITHM': 'HS256'  # The algorithm used to sign the token. The formula on how the token is made
+    'ALGORITHM': 'HS256',  # The algorithm used to sign the token. The formula on how the token is made
+    'CHECK_REVOKE_TOKEN': True,  # Tokens carry a password hash claim, so a password change revokes them
 }
 
 SPECTACULAR_SETTINGS = {
@@ -193,6 +194,9 @@ STORAGES = {
 # Media files (Uploaded by users)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Private uploads (KYC documents). Never served by URL; read through an authorising view.
+PRIVATE_MEDIA_ROOT = BASE_DIR / 'private_media'
 
 # SMTP Configuration for sending emails
 EMAIL_BACKEND = os.getenv(

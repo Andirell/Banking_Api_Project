@@ -2,6 +2,26 @@ from .models import SuspiciousActivity
 from transactions.models import Transaction
 from django.utils import timezone
 from datetime import timedelta
+import logging
+from django.db import transaction as db_transaction
+
+logger = logging.getLogger(__name__)
+
+
+def flag_transaction_safely(transaction_obj):
+    """Run the fraud scorer without letting it block the payment, but never silently.
+
+    If scoring fails, a `monitoring_failed` flag is recorded so the gap shows up
+    in the staff flagged-transactions report and can be re-scored.
+    """
+    try:
+        with db_transaction.atomic():  # savepoint: a scorer DB error can't poison the payment
+            return simple_flagTransaction(transaction_obj)
+    except Exception:
+        logger.exception("Fraud scoring failed for transaction %s", transaction_obj.pk)
+        return SuspiciousActivity.objects.create(
+            transaction=transaction_obj, risk_score=0.0, reason="monitoring_failed"
+        )
 
 
 def simple_flagTransaction(transaction_obj):
