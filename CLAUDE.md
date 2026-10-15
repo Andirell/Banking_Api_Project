@@ -11,7 +11,7 @@ A Django 6 + Django REST Framework banking API with JWT auth (simplejwt), deploy
 The virtualenv is `myenv/` (Python 3.14). Use `myenv/bin/python` directly.
 
 ```bash
-myenv/bin/pip install -r requirements.txt           # requirements.txt is canonical; requirement.txt is a stale duplicate
+myenv/bin/pip install -r requirements.txt
 myenv/bin/python manage.py migrate
 myenv/bin/python manage.py runserver                 # Swagger at http://127.0.0.1:8000/api/docs/
 myenv/bin/python manage.py test                      # whole suite (SQLite)
