@@ -32,7 +32,7 @@ Line numbers refer to the code **before** the fixes in this branch.
 | B6 | Low | Bug | `users/views.py:459,502` | `block_user` checks `role == "admin"`; everything else uses `is_staff` |
 | B7 | Low | Bug | `users/views.py:646` | `send_mail(fail_silently=False)` in an anonymous endpoint → 500 if SMTP is down |
 | ST1 | Low | Style | many | Unused imports, imports inside functions (`users/views.py:63,82,199,248`) |
-| ST2 | Low | Style | repo root | `requirement.txt` and `requirements.txt` both exist |
+| ST2 | Low | Style | repo root | `requirement.txt` and `requirements.txt` both exist (fixed 2026-10-15: stale `requirement.txt` removed) |
 | ST3 | Low | Style | `loans/models.py` | Tabs instead of spaces |
 | ST4 | Low | Style | `analytics/utils.py:7` | camelCase function name `simple_flagTransaction` |
 | ST5 | Low | Style | `users/signals.py:13`, logging calls | `print()` in signals; f-strings in `logger.*` calls |
