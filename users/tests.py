@@ -417,3 +417,97 @@ class EmailFailureTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(mail.outbox[-1].to, ["user@example.com"])
         self.assertIn(last_emailed_code(), mail.outbox[-1].body)
+
+
+class GenericOTPTests(TestCase):
+    """The generic send/verify OTP endpoints use the same DB-backed challenges as sign-in."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = make_user("user@example.com")
+        self.client, _ = auth_client(self.user)
+
+    def send(self):
+        return self.client.post("/users/send-otp/")
+
+    def verify(self, code, client=None):
+        return (client or self.client).post("/users/verify-otp/", {"otp": code}, format="json")
+
+    def test_code_is_stored_in_db_not_session(self):
+        self.send()
+
+        self.assertTrue(OTP.objects.filter(user=self.user, purpose="verify", is_used=False).exists())
+        self.assertNotIn("otp_code", self.client.session)
+
+    def test_code_works_once(self):
+        self.send()
+        code = last_emailed_code()
+
+        self.assertEqual(self.verify(code).status_code, 200)
+        self.assertEqual(self.verify(code).status_code, 400)
+
+    def test_code_is_bound_to_its_user(self):
+        self.send()
+        code = last_emailed_code()
+
+        other, _ = auth_client(make_user("other@example.com"))
+        self.assertEqual(self.verify(code, client=other).status_code, 400)
+
+    def test_signin_code_is_not_accepted(self):
+        OTP.create_for_user(self.user, "123456", purpose="signin")
+
+        self.assertEqual(self.verify("123456").status_code, 400)
+
+    def test_expired_code_is_rejected(self):
+        self.send()
+        code = last_emailed_code()
+        OTP.objects.filter(user=self.user).update(expires_at=timezone.now() - timedelta(seconds=1))
+
+        self.assertEqual(self.verify(code).status_code, 400)
+
+    def test_wrong_guesses_burn_the_challenge(self):
+        self.send()
+        code = last_emailed_code()
+        for _ in range(5):
+            self.verify("000000" if code != "000000" else "111111")
+
+        self.assertEqual(self.verify(code).status_code, 400)
+
+    def test_issuance_is_capped(self):
+        for _ in range(3):
+            self.assertEqual(self.send().status_code, 200)
+
+        self.assertEqual(self.send().status_code, 429)
+
+    def test_email_failure_returns_503_and_retires_code(self):
+        with patch("users.views.send_mail", side_effect=OSError("smtp down")):
+            res = self.send()
+
+        self.assertEqual(res.status_code, 503)
+        self.assertFalse(OTP.objects.filter(user=self.user, purpose="verify", is_used=False).exists())
+
+
+class ProductionSecuritySettingsTests(TestCase):
+    """With DEBUG off, `check --deploy` raises no HTTPS / cookie / HSTS warnings."""
+
+    def test_deploy_check_is_clean(self):
+        import os
+        import subprocess
+        import sys
+
+        env = {
+            **os.environ,
+            "RENDER": "true",
+            "DEBUG": "false",
+            "SECRET_KEY": "x9-" + "q7Lm2Zr8Vt4Kw1Np6Hs3Jd5Fb0Gc" * 3,
+            "ALLOWED_HOSTS": "example.com",
+        }
+        result = subprocess.run(
+            [sys.executable, "manage.py", "check", "--deploy", "--fail-level", "WARNING"],
+            cwd=Path(__file__).resolve().parent.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

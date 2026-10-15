@@ -106,10 +106,12 @@ Deleting rows was never thought through for money data, so Django's default `CAS
 
 ## Still to do (owner decision)
 
-- **Purge history:** `media/` and `db.sqlite3` are now untracked, but they remain in **git history**. Removing them needs `git filter-repo --path media --path db.sqlite3 --invert-paths` and a force-push to GitHub. Anyone who cloned the repo already has the files.
 - **Rotate the key:** rotate the `SECRET_KEY` on Render, and on any instance that ever ran with the old fallback key.
-- **Generic OTP endpoints:** `send-otp/` and `verify-otp/` still use session state. They don't grant anything today, but they should move to the DB-backed OTP helper before anything depends on them.
-- **Hardening:** `check --deploy` still warns about `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, `SECURE_SSL_REDIRECT` and HSTS. The password-reset grant now lives in the session, so set the secure-cookie flags in production.
+
+### Done since
+- **Purge history (2026-10-14):** `media/` and `db.sqlite3` were removed from git history with `git filter-repo` and force-pushed. Clones made before that still have them.
+- **Generic OTP endpoints (2026-10-15):** `send-otp/` and `verify-otp/` now use the DB-backed helpers (purpose `verify`), with the same single-use, 5-guess, issuance-cap and expiry rules. They return 503 if the email fails. Tests: `users.tests.GenericOTPTests`.
+- **Hardening (2026-10-15):** with `DEBUG` off, the settings turn on `SECURE_PROXY_SSL_HEADER`, `SECURE_SSL_REDIRECT` (except `/health/`), secure session and CSRF cookies, and HSTS for 1 year. `check --deploy` is clean. Test: `users.tests.ProductionSecuritySettingsTests`.
 
 ## Behaviour changes to tell API clients about
 

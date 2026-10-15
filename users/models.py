@@ -59,6 +59,7 @@ class OTP(models.Model):
     PURPOSE_CHOICES = (
         ("signin", "Sign in"),
         ("password_reset", "Password reset"),
+        ("verify", "Verification"),
     )
 
     user = models.ForeignKey('users.User', on_delete=models.CASCADE, related_name='otps')

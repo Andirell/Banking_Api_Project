@@ -51,6 +51,19 @@ CSRF_TRUSTED_ORIGINS = [
 if RENDER_EXTERNAL_HOSTNAME:
     CSRF_TRUSTED_ORIGINS.append(f"https://{RENDER_EXTERNAL_HOSTNAME}")
 
+# HTTPS-only in production. Render terminates TLS at its proxy and passes the
+# original scheme in X-Forwarded-Proto. The password-reset grant lives in the
+# session, so its cookie must never travel over plain HTTP.
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = True
+    SECURE_REDIRECT_EXEMPT = [r"^health/$"]  # Render's internal health check uses plain HTTP
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
 # Application definition
 
 INSTALLED_APPS = [
