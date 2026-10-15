@@ -1,5 +1,7 @@
 from django.db import models
 from django.conf import settings
+from decimal import Decimal
+
 from django.core.validators import MinValueValidator
 import uuid  # A unique identifier
 
@@ -33,7 +35,7 @@ class Transaction(models.Model):
     
     # The type of transaction (deposit, withdraw, transfer)
     transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE_CHOICES)
-    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(0.01)])
+    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     description = models.TextField(blank=True, null=True)
     # External proof of funding for deposits (bank/payment reference). Unique, so it can't be reused.

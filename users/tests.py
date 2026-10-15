@@ -601,16 +601,26 @@ class ThrottleIdentityTests(TestCase):
     def setUp(self):
         cache.clear()
 
+    def post(self, forwarded_for):
+        return APIClient().post(
+            "/users/verify-signin-otp/", {"email": "a@example.com", "otp": "000000"}, format="json",
+            HTTP_X_FORWARDED_FOR=forwarded_for,
+        )
+
     def test_spoofed_forwarded_for_does_not_reset_the_limit(self):
-        client = APIClient()
         for i in range(11):
-            # What Render forwards: the client's fake value, then the real address it appended.
-            res = client.post(
-                "/users/verify-signin-otp/", {"email": "a@example.com", "otp": "000000"}, format="json",
-                HTTP_X_FORWARDED_FOR=f"10.0.0.{i}, 203.0.113.7",
-            )
+            # Render's real header: the client's fake value, then the client,
+            # a Cloudflare edge (varies) and Render's load balancer.
+            res = self.post(f"10.0.0.{i}, 203.0.113.7, 172.69.0.{i}, 10.192.208.184")
 
         self.assertEqual(res.status_code, 429)
+
+    def test_visitors_behind_the_same_proxies_get_separate_limits(self):
+        for _ in range(10):
+            self.post("203.0.113.7, 172.69.0.1, 10.192.208.184")
+
+        # Another visitor through the very same Cloudflare edge and load balancer.
+        self.assertEqual(self.post("198.51.100.20, 172.69.0.1, 10.192.208.184").status_code, 401)
 
 
 SIGNUP = {

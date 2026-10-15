@@ -115,7 +115,7 @@ Settings are read from the environment, or from a local `.env` file (never commi
 | `FRONTEND_URL` | empty | Customer web app, e.g. `https://app.example.com`. Emails link to it; with no value they have no button. |
 | `API_DOCS_PUBLIC` | same as DEBUG | Serve Swagger (`/api/docs/`) and the schema. Off in production unless set to `true`. |
 | `UNVERIFIED_TRANSFER_LIMIT` | `5000.00` | Largest single transfer before KYC is verified. |
-| `NUM_PROXIES` | `1` | Proxies in front of the app (Render has one); used to find the real client IP for rate limits. |
+| `NUM_PROXIES` | `3` | Proxies that append to `X-Forwarded-For` (Render: client, Cloudflare, load balancer = 3). Used to find the real client IP for rate limits; set `0` when nothing sits in front of the app. |
 
 Setup the Database
 
