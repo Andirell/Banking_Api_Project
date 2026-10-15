@@ -1,5 +1,5 @@
 import logging
-from django.db import transaction as db_transaction
+from django.db import IntegrityError, transaction as db_transaction
 from rest_framework.exceptions import ValidationError
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -16,7 +16,8 @@ from drf_spectacular.utils import extend_schema
 from utils.schemas import WalletDetailResponse, WalletCreateResponse, WalletUpdateResponse, ErrorResponse
 from rest_framework.permissions import IsAdminUser
 from transactions.models import Transaction
-from .services import lock_wallets
+from analytics.utils import flag_transaction_safely
+from .services import credit, debit, lock_wallets
 
 logger = logging.getLogger(__name__)
 
@@ -99,44 +100,55 @@ class WalletAdminUpdateAPIView(generics.UpdateAPIView):
     serializer_class = AdminWalletUpdateSerializer
     permission_classes = [IsAdminUser]  # Only admins can access this view
 
+    def get_serializer(self, *args, **kwargs):
+        # PATCH would otherwise make reason and funding_reference optional.
+        kwargs["partial"] = False
+        return super().get_serializer(*args, **kwargs)
+
     @extend_schema(
         summary="Admin update wallet balance",
-        description="This endpoint allows admins to update the wallet balance of any user. Admins can modify the balance directly, for example, adding or subtracting funds.",
+        description="Staff correction of a wallet balance. Requires a reason and a unique funding reference; the change is audited and fraud-checked.",
         tags=["Wallets"],
         responses={
             200: WalletUpdateResponse,  # Custom Swagger response schema for success
             400: ErrorResponse,  # Schema for error responses (e.g., invalid input)
         },
-        request=WalletSerializer,  # Define what the request body should look like
+        request=AdminWalletUpdateSerializer,
     )
    
     def perform_update(self, serializer):
         wallet = serializer.instance
-        balance = serializer.validated_data.get("balance", wallet.balance)
-
-        # Validate balance is not negative
-        if balance < 0:
-            raise ValidationError("Balance cannot be negative.")
+        validated = serializer.validated_data
+        balance = validated["balance"]
+        reference = validated["funding_reference"]
 
         # Lock the row so the old balance (and the audit amount) is the real
-        # current value, and commit the change and its audit record together:
-        # if the audit can't be written, the balance change rolls back.
-        with db_transaction.atomic():
-            (locked,) = lock_wallets(wallet.user_id)
-            old_balance = locked.balance
-            if balance == old_balance:
-                return
-            locked.balance = balance
-            locked.save(update_fields=["balance"])
+        # current value. The change, its audit record and the fraud check commit
+        # together: if the audit can't be written, the balance change rolls back.
+        try:
+            with db_transaction.atomic():
+                (locked,) = lock_wallets(wallet.user_id)
+                old_balance = locked.balance
+                if balance == old_balance:
+                    return
+                if balance > old_balance:
+                    credit(locked, balance - old_balance)
+                else:
+                    debit(locked, old_balance - balance)
 
-            Transaction.objects.create(
-                sender=locked.user,
-                receiver=None,
-                transaction_type='deposit' if balance > old_balance else 'withdraw',
-                amount=abs(balance - old_balance),
-                status='successful',
-                description=f'Admin balance adjustment by {self.request.user}'
-            )
+                tx = Transaction.objects.create(
+                    sender=locked.user,
+                    receiver=None,
+                    transaction_type='deposit' if balance > old_balance else 'withdraw',
+                    amount=abs(balance - old_balance),
+                    status='successful',
+                    funding_reference=reference,
+                    created_by=self.request.user,
+                    description=f'Admin balance adjustment: {validated["reason"]}',
+                )
+                flag_transaction_safely(tx)
+        except IntegrityError:
+            raise ValidationError({"funding_reference": "This funding reference has already been used."})
 
         logger.info("Admin %s set wallet %s balance %s -> %s", self.request.user.pk, wallet.pk, old_balance, balance)
         wallet.refresh_from_db(fields=["balance"])

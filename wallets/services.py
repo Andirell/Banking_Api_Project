@@ -27,13 +27,22 @@ def lock_wallets(*user_ids):
     return [by_user[user_id] for user_id in user_ids]
 
 
+def _require_positive(amount):
+    # A non-positive amount would turn a credit into a debit (or a debit into
+    # a credit that skips the funds check), so refuse it outright.
+    if amount <= 0:
+        raise ValueError(f"amount must be positive, got {amount}")
+
+
 def credit(wallet, amount):
+    _require_positive(amount)
     Wallet.objects.filter(pk=wallet.pk).update(balance=F("balance") + amount)
     wallet.refresh_from_db(fields=["balance"])
 
 
 def debit(wallet, amount):
     """Debit only if the *current* balance covers it; raise InsufficientFunds otherwise."""
+    _require_positive(amount)
     updated = Wallet.objects.filter(pk=wallet.pk, balance__gte=amount).update(balance=F("balance") - amount)
     if updated != 1:
         raise InsufficientFunds()

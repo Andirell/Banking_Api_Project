@@ -16,6 +16,11 @@ class LoanApplication(models.Model):
 	status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
 	reason = models.TextField(blank=True, null=True)
 	created_at = models.DateTimeField(auto_now_add=True)
+	# The staff member who approved or rejected it, and when.
+	decided_by = models.ForeignKey(
+		settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="decided_loans", null=True, blank=True
+	)
+	decided_at = models.DateTimeField(blank=True, null=True)
 
 	def __str__(self):
 		# use getattr to keep static type-checkers happy about dynamic model attrs
