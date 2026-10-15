@@ -10,8 +10,9 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from django.shortcuts import get_object_or_404
 from .models import LoanApplication
-from .serializers import LoanApplicationSerializer, LoanApplyRequestSerializer
+from .serializers import MAX_LOAN_AMOUNT, MAX_LOAN_MONTHS, LoanApplicationSerializer, LoanApplyRequestSerializer
 from users.models import User
+from users.permissions import IsKYCVerified
 from wallets.services import InsufficientFunds, credit, debit, lock_wallets
 from .utils import create_emis_for_loan
 from rest_framework.views import APIView
@@ -19,6 +20,7 @@ from .models import EMI
 from .serializers import EMIReadSerializer
 from django.db import transaction as db_transaction
 from django.db.models import F
+from django.utils import timezone
 from transactions.models import Transaction
 from decimal import Decimal
 from drf_spectacular.utils import extend_schema
@@ -41,7 +43,7 @@ class EMIPayResponseSerializer(serializers.Serializer):
 
 class LoanApplyAPIView(generics.CreateAPIView):
     serializer_class = LoanApplyRequestSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsKYCVerified]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -70,11 +72,11 @@ class LoanStatusAPIView(generics.RetrieveAPIView):
 @api_view(["POST"])
 @permission_classes([permissions.IsAdminUser])
 def admin_approve_loan(request):
-    loan_id = request.data.get("loan_id")
-    action = request.data.get("action")  # "approve" or "reject"
-
-    if not loan_id or action not in ("approve", "reject"):
-        return Response({"error": "loan_id and action are required"}, status=status.HTTP_400_BAD_REQUEST)
+    request_serializer = AdminApproveRequestSerializer(data=request.data)
+    if not request_serializer.is_valid():
+        return Response({"error": "loan_id (integer) and action (approve/reject) are required"}, status=status.HTTP_400_BAD_REQUEST)
+    loan_id = request_serializer.validated_data["loan_id"]
+    action = request_serializer.validated_data["action"]
 
     # One atomic unit: decision, disbursement, ledger entry and schedule. The
     # loan row is locked so two approvals can't both see "pending".
@@ -84,10 +86,18 @@ def admin_approve_loan(request):
             return Response({"error": f"loan is already {loan.status}"}, status=status.HTTP_400_BAD_REQUEST)
 
         if action == "approve":
-            loan.status = "approved"
-            loan.save(update_fields=["status"])
-
+            # Applications from before the apply-time limits existed may be out of range.
+            if not (0 < loan.amount <= MAX_LOAN_AMOUNT and 1 <= loan.duration_months <= MAX_LOAN_MONTHS):
+                return Response({"error": "loan amount or duration is out of range"}, status=status.HTTP_400_BAD_REQUEST)
             (wallet,) = lock_wallets(loan.user_id)
+            # Checked under the wallet lock that account closure also takes.
+            if not User.objects.filter(pk=loan.user_id, is_active=True).exists():
+                return Response({"error": "borrower's account is closed or blocked"}, status=status.HTTP_400_BAD_REQUEST)
+            loan.status = "approved"
+            loan.decided_by = request.user
+            loan.decided_at = timezone.now()
+            loan.save(update_fields=["status", "decided_by", "decided_at"])
+
             credit(wallet, loan.amount)
             Transaction.objects.create(
                 sender=loan.user,
@@ -95,12 +105,15 @@ def admin_approve_loan(request):
                 transaction_type="deposit",
                 amount=loan.amount,
                 status="successful",
+                created_by=request.user,
                 description=f"Loan {loan.pk} disbursement",
             )
             create_emis_for_loan(loan)
         else:
             loan.status = "rejected"
-            loan.save(update_fields=["status"])
+            loan.decided_by = request.user
+            loan.decided_at = timezone.now()
+            loan.save(update_fields=["status", "decided_by", "decided_at"])
 
     return Response({"message": f"loan {action}d"}, status=status.HTTP_200_OK)
 

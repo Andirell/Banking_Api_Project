@@ -2,6 +2,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 from datetime import timedelta
+from decimal import Decimal
 from django.core.exceptions import ImproperlyConfigured
 from my_fintech_app.secret_key import resolve_secret_key
 
@@ -88,9 +89,6 @@ INSTALLED_APPS = [
     'analytics',
 ]
 
-CORS_ALLOWED_ORIGINS = []  # Add allowed origins for production
-CORS_ALLOW_ALL_ORIGINS = True  # Set to False in production and use CORS_ALLOWED_ORIGINS
-
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -104,6 +102,13 @@ MIDDLEWARE = [
 
 AUTH_USER_MODEL = "users.User"
 
+# Largest single transfer a customer can send before staff verify their KYC.
+# Loans and withdrawals always need verified KYC (users.permissions.IsKYCVerified).
+UNVERIFIED_TRANSFER_LIMIT = Decimal(os.getenv("UNVERIFIED_TRANSFER_LIMIT", "5000.00"))
+
+# Locks an account for 15 minutes after 5 wrong passwords (API sign-in and admin).
+AUTHENTICATION_BACKENDS = ["users.backends.LockoutModelBackend"]
+
 ROOT_URLCONF = 'my_fintech_app.urls'
 
 REST_FRAMEWORK = {
@@ -114,8 +119,14 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated'  # Makes all endpoints or URLs protected
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'otp': '10/minute',  # Per-IP limit on anonymous OTP endpoints (see users.throttles)
+        'otp': '10/minute',  # Per-IP limit on anonymous sign-in/OTP endpoints (see users.throttles)
+        'signup': '5/hour',  # Per-IP account creation
+        'transfer': '30/hour',  # Per-user transfers (also limits probing which emails have accounts)
     },
+    # Throttles identify clients by IP. Render's proxy appends the real client
+    # address to X-Forwarded-For; anything before it is client-supplied and can
+    # be faked, so only trust the last NUM_PROXIES entry.
+    'NUM_PROXIES': int(os.getenv('NUM_PROXIES', 1)),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema'
 }
 
@@ -137,13 +148,21 @@ TEMPLATES = [
 WSGI_APPLICATION = 'my_fintech_app.wsgi.application'
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),  # Set expiration for access token
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),  # Set expiration for refresh token
+    # A stolen access token is only useful briefly; clients renew it at
+    # POST /users/token/refresh/. Each refresh token works once: refreshing
+    # returns a new one and blacklists the old.
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
     'SIGNING_KEY': SECRET_KEY,  # Your Django key to give the token a unique signature or to sign the token
     'AUTH_HEADER_TYPES': ('Bearer',),  # The type of authorization header. It is the label of the token
     'ALGORITHM': 'HS256',  # The algorithm used to sign the token. The formula on how the token is made
     'CHECK_REVOKE_TOKEN': True,  # Tokens carry a password hash claim, so a password change revokes them
 }
+
+# Swagger UI and the OpenAPI schema (/api/docs/, /api/schema/).
+API_DOCS_PUBLIC = env_bool("API_DOCS_PUBLIC", default=DEBUG)
 
 SPECTACULAR_SETTINGS = {
     'TITLE': "Fintech Application API",
@@ -233,3 +252,6 @@ ANYMAIL = {
     if name.startswith("ANYMAIL_")
 }
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "webmaster@localhost")
+
+# Customer-facing web app; email links point here. Without it, emails carry no links.
+FRONTEND_URL = os.getenv("FRONTEND_URL", "").rstrip("/")

@@ -14,6 +14,7 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+from django.conf import settings
 from django.contrib import admin
 from django.urls import path, include
 from drf_spectacular.views import ( SpectacularAPIView, SpectacularSwaggerView )
@@ -32,8 +33,12 @@ urlpatterns = [
     path("analytics/", include("analytics.urls")),
     path("loans/", include("loans.urls")),
     path("wallets/", include("wallets.urls")),
-
-    # API Documentation
-    path("api/schema/", SpectacularAPIView.as_view(), name="schema" ),
-    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema") )
 ]
+
+# API documentation maps every endpoint, so production serves it only when
+# API_DOCS_PUBLIC is switched on (it is always on locally with DEBUG).
+if settings.API_DOCS_PUBLIC:
+    urlpatterns += [
+        path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+        path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema")),
+    ]

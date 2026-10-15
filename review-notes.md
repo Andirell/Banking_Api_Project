@@ -119,4 +119,73 @@ Deleting rows was never thought through for money data, so Django's default `CAS
 - Enabling `CHECK_REVOKE_TOKEN` invalidates every token issued before the deploy, so everyone signs in again once.
 - `DELETE /users/delete/` closes the account (soft delete). It returns 409 while there are unpaid EMIs, a pending loan or a non-zero balance.
 - KYC documents: download via `GET /users/kyc/documents/<user_id>/<identity|address>/`. `/media/` is no longer served.
-- `verify-signin-otp`, `request-password-reset`, `verify-password-reset-otp` and `reset-password` are rate-limited per IP (10/min). A challenge dies after 5 wrong guesses, and each account gets 3 codes per 15 minutes.
+- `signin`, `verify-signin-otp`, `request-password-reset`, `verify-password-reset-otp` and `reset-password` are rate-limited per IP (10/min). A challenge dies after 5 wrong guesses, and each account gets 3 codes per 15 minutes.
+
+## Second review (2026-10-15): open findings N1–N18
+
+This is a full re-read of every view, serializer, model, setting and deploy file, done after S1–S17 were fixed and deployed. Each fix must ship with a test that fails without it.
+
+**Fixed:** N1–N18 (see "Fixes applied" below).
+
+### High
+
+| ID | Issue | Where | How it goes wrong | Suggested fix |
+|---|---|---|---|---|
+| N1 | Unlimited password guessing | `users/views.py` `signin`; `/admin/` login | `signin` has no throttle and no per-account lockout, so passwords can be guessed indefinitely. `/admin/` is the same, and a staff password found there gives full access with no emailed code. | Add a sign-in throttle per IP and per email, plus a DB-backed failure counter with a temporary lockout. Throttle `/admin/` login too (e.g. django-axes). |
+| N2 | Rate limits bypassable by faking an IP header | `settings.py` `REST_FRAMEWORK` | `NUM_PROXIES` isn't set, so DRF identifies clients by the whole `X-Forwarded-For` header, which the client controls. A different fake value on each request starts a fresh `OTPRateThrottle` bucket. | Set `NUM_PROXIES` to Render's proxy count (likely 1; confirm from live request logs). Test that a spoofed header can't avoid the limit. |
+| N3 | Loan amount and duration not validated | `loans/serializers.py` `LoanApplyRequestSerializer`; `wallets/services.py` | Apply for `amount=-500` and have it approved. Disbursal debits the wallet and the EMIs are negative. Paying one calls `debit(-x)`, the `balance__gte=-x` guard always passes, and the balance goes up: money is created. `duration_months=10**8` makes approval try to create 100M EMI rows. | Require `amount > 0`, set a maximum amount and `1 <= duration_months <= 60`. Make `credit()`/`debit()` raise `ValueError` for `amount <= 0` as a second line of defence. |
+
+### Medium
+
+| ID | Issue | Where | How it goes wrong | Suggested fix |
+|---|---|---|---|---|
+| N4 | Staff can set any balance | `wallets/views.py` `WalletAdminUpdateAPIView` (`/wallets/admin/update/<pk>/`) | Any staff user can set any balance, with no funding reference, no reason and no fraud flag. This bypasses the referenced, staff-only deposit control (S1), so one insider can create money. | Remove the endpoint, or require `reason` and a unique `funding_reference`, use `credit`/`debit`, and call `flag_transaction_safely`. |
+| N5 | Audit trail doesn't record who acted | `transactions/models.py`, `loans/models.py` | Deposits, balance adjustments and loan decisions name the staff member only in free-text `description`, or not at all. | Add a `Transaction.created_by` field and `LoanApplication.decided_by` (FK to user, `PROTECT`), set by the views. |
+| N6 | BVN/phone enumeration; BVN exposed | `users/serializers.py` `UserSerializer.validate`, `UserProfileSerializer` | Sign-up answers "A user with this BVN already exists", so anyone can test whether a BVN is registered. A duplicate `phone_number` isn't checked and fails with an unhandled database error (500), which leaks the same thing. BVN is stored in plain text and returned in full by `/users/me/`. | Return a generic error and catch the database error. Show only the last 4 BVN digits. Consider encrypting BVN at rest. |
+| N7 | Sign-up not rate limited | `users/views.py` `signup` | Anyone can script bulk account creation; each account triggers a welcome email to an address the attacker picks. This burns Brevo quota and sender reputation. | Add a per-IP sign-up throttle. Optionally verify the email before sending anything else. |
+| N8 | KYC never enforced | `users/views.py` KYC views; transactions/loans views | Transfers, withdrawals and loans all work without KYC. Staff can approve KYC with no documents uploaded. Re-uploading after approval sets `kyc_status="pending"` but leaves `kyc_approved=True`. Replaced files are never deleted. | Require `kyc_status == "verified"` for loans and withdrawals (and transfers above a limit). Refuse approval without documents. Reset `kyc_approved` on re-upload and delete the replaced files. |
+| N9 | Account closure race; closed accounts can be reopened | `users/views.py` `delete_user`, `unblock_user` | The balance and loan checks run without a lock, so an incoming transfer or loan approval that commits between the check and deactivation leaves money in a closed account. `unblock_user` can reactivate an anonymised, closed account. | Lock the wallet with `lock_wallets` and re-check inside one `atomic()` block. Refuse to unblock closed accounts (e.g. a `closed_at` field). |
+| N10 | Long-lived tokens | `settings.py` `SIMPLE_JWT` | A stolen access token works for 24 hours. Refresh tokens (7 days) aren't rotated, and no refresh endpoint is mounted. | Cut access tokens to 15 minutes, mount `TokenRefreshView`, and enable `ROTATE_REFRESH_TOKENS` and `BLACKLIST_AFTER_ROTATION`. |
+| N11 | Transfers reveal which emails have accounts | `transactions/serializers.py` `validate_receiver_email` | Any logged-in user can test unlimited emails ("Receiver with this email does not exist"). The check includes closed accounts. | Throttle transfers per user. Use one error for every receiver problem. |
+
+### Low / hardening
+
+| ID | Issue | Where | Suggested fix |
+|---|---|---|---|
+| N12 | Emails are case-sensitive, so `A@x.com` and `a@x.com` can be two accounts (look-alike accounts, misdirected transfers) | `users/serializers.py`, `signin`, transfer lookup | Lowercase emails on save and add a case-insensitive unique constraint (`Lower("email")`). |
+| N13 | Swagger and the API schema are public in production | `my_fintech_app/urls.py` | Serve them only when `DEBUG` is on, or only to staff. |
+| N14 | CORS settings do nothing (`corsheaders` isn't installed); `CORS_ALLOW_ALL_ORIGINS=True` would be dangerous if someone installed it | `settings.py` | Delete them, or install corsheaders with an explicit origin list. |
+| N15 | Bad input causes 500s: non-numeric `loan_id`, bad `from_date`/`to_date`, duplicate phone | `loans/views.py` `admin_approve_loan`, `analytics/views.py`, sign-up | Validate with serializers and return 400. |
+| N16 | `logout` catches a bare `Exception` and doesn't check that the token belongs to the caller | `users/views.py` `logout_view` | Catch specific errors and check `token["user_id"] == request.user.pk`. |
+| N17 | Welcome email hard-codes its sender and a `localhost:3000` link | `users/signals.py` | Use `DEFAULT_FROM_EMAIL` and a `FRONTEND_URL` setting. |
+| N18 | Nothing checks dependencies for known vulnerabilities | `requirements.txt` | Run `pip-audit` (e.g. in CI). |
+
+Still open from the first review: rotate `SECRET_KEY` on Render (owner action).
+
+### Fixes applied (N1–N18)
+
+| ID | Fix | Tests |
+|---|---|---|
+| N1 | `users.backends.LockoutModelBackend` is the only auth backend, so it covers both API sign-in and `/admin/` login. After 5 wrong passwords the account is locked for 15 minutes; even the right password is refused, with the same answer as a wrong one. The counter lives on `User` (`failed_signin_attempts`, `signin_locked_until`) and is updated with `F()`. A successful password reset clears the lock. `signin` also uses `OTPRateThrottle` (10/min per IP). | `users.tests.SigninLockoutTests` |
+| N2 | `REST_FRAMEWORK["NUM_PROXIES"]` (env `NUM_PROXIES`, default 1): throttles use the address Render appends, not the client-supplied part of `X-Forwarded-For`. If Render ever adds a hop, set `NUM_PROXIES` accordingly. | `users.tests.ThrottleIdentityTests` |
+| N3 | Loan applications need `0.01 ≤ amount ≤ 1,000,000` and `1 ≤ duration_months ≤ 60`. Approval re-checks this for older applications. `wallets.services.credit`/`debit` raise `ValueError` for amounts ≤ 0. | `loans.tests.LoanLimitsTests`, `wallets.tests.NonPositiveAmountTests` |
+| N4 | `PATCH/PUT /wallets/admin/update/<pk>/` requires `reason` and a unique `funding_reference` (PATCH can't skip them). It moves money through `credit`/`debit`, records the staff member, and is fraud-checked. | `wallets.tests.AdminWalletAdjustmentTests` |
+| N5 | `Transaction.created_by` (deposits, adjustments, loan payouts) and `LoanApplication.decided_by` / `decided_at` (approve and reject), all `PROTECT`. | `transactions.tests.StaffAuditTests`, `loans.tests.LoanGovernanceTests`, `wallets.tests.AdminWalletAdjustmentTests` |
+| N6 | A taken BVN or phone number gets one generic sign-up error (DRF's per-field unique validators are removed for those fields). A race that reaches the DB unique constraint returns 400, not 500. BVN must be 11 digits. `/users/me/` returns `*******1234`. | `users.tests.SignupPrivacyTests` |
+| N7 | `SignupRateThrottle`: 5 sign-ups per hour per IP. | `users.tests.SignupPrivacyTests` |
+| N8 | `users.permissions.IsKYCVerified` gates loan applications and withdrawals. Transfers above `UNVERIFIED_TRANSFER_LIMIT` (default 5,000) need verified KYC. Approval is refused without both documents. Re-uploading resets `kyc_status`/`kyc_approved` and deletes the old files. | `users.tests.KYCReviewTests`, `transactions.tests.KYCTransactionRulesTests`, `loans.tests.LoanGovernanceTests` |
+| N9 | `delete_user` does its checks and the closure under `lock_wallets`. Transfers, deposits and loan payouts re-check that the receiver is active after taking the lock. New `User.closed_at`; `unblock_user` refuses closed accounts. | `users.tests.AccountClosureRaceTests`, `transactions.tests.ReceiverPrivacyAndClosureTests`, `loans.tests.LoanGovernanceTests` |
+| N10 | Access tokens last 15 minutes. `POST /users/token/refresh/` returns a new access and refresh token; the old refresh token is blacklisted. | `users.tests.TokenLifetimeTests` |
+| N11 | Unknown, closed and blocked receivers all get "Transfer could not be completed. Check the receiver's email." Transfers are limited to 30 per hour per user. | `transactions.tests.ReceiverPrivacyAndClosureTests` |
+| N12 | `User.save()` lowercases emails; lookups use `email__iexact`; DB constraint `user_email_ci_unique` on `Lower(email)`. Migration 0011 lowercases existing emails and stops with a message if two differ only by case. | `users.tests.EmailCaseTests` |
+| N13 | Swagger and the schema are mounted only when `API_DOCS_PUBLIC` is true (default: same as `DEBUG`). | `users.tests.APIDocsVisibilityTests` |
+| N14 | Removed the unused CORS settings. If a browser frontend on another origin is added, install django-cors-headers with an explicit `CORS_ALLOWED_ORIGINS`. | — |
+| N15 | `admin_approve_loan` validates input with its serializer; the analytics filters return 400 on bad values (phone duplicates: N6). | `loans.tests.LoanAdminInputTests`, `analytics.tests.FlaggedFilterValidationTests` |
+| N16 | `logout` catches only `TokenError` and refuses another user's refresh token. | `users.tests.LogoutOwnershipTests` |
+| N17 | Welcome email uses `DEFAULT_FROM_EMAIL`; the button links to `FRONTEND_URL` and is hidden when that's unset. | `users.tests.WelcomeEmailTests` |
+| N18 | Upgraded Django 6.0.8, DRF 3.17.2, Pillow 12.3.0, PyJWT 2.15.0 and sqlparse 0.6.0 (pip-audit: no known vulnerabilities). `.github/workflows/ci.yml` runs the tests, the migration check and `pip-audit` on every push. | CI |
+
+Also fixed while here: `analytics/` had no `__init__.py`, so the full test run silently skipped its tests.
+- (2026-10-15) Emails are case-insensitive and stored lowercase.
+- (2026-10-15) Swagger (`/api/docs/`) is off in production unless `API_DOCS_PUBLIC=true`.
+- (2026-10-15) `logout` only accepts your own refresh token.

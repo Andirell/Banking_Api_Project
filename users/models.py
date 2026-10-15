@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models.functions import Lower
 from django.contrib.auth.models import AbstractUser
 from .managers import UserManager
 from decimal import Decimal
@@ -37,6 +38,11 @@ class User(AbstractUser):
     # Admin KYC Approval Fields
     kyc_approved = models.BooleanField(default=False)  # Tracks whether KYC is approved
     kyc_rejection_reason = models.TextField(blank=True, null=True)  # Reason for rejection
+    # Password lockout (see users.backends.LockoutModelBackend)
+    failed_signin_attempts = models.PositiveSmallIntegerField(default=0)
+    signin_locked_until = models.DateTimeField(blank=True, null=True)
+    # Set when the customer closes the account; a closed account is never reactivated.
+    closed_at = models.DateTimeField(blank=True, null=True)
 
 
 
@@ -44,6 +50,18 @@ class User(AbstractUser):
     REQUIRED_FIELDS = ["first_name", "last_name"]
 
     objects: UserManager = UserManager()  # type: ignore
+
+    class Meta(AbstractUser.Meta):
+        constraints = [
+            # Emails identify accounts (sign-in, transfers), so "A@x.com" and
+            # "a@x.com" must not be two different people.
+            models.UniqueConstraint(Lower("email"), name="user_email_ci_unique"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.email:
+            self.email = self.email.strip().lower()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.email

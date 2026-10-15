@@ -14,6 +14,9 @@ PASSWORD = "Str0ng-Passw0rd!"
 
 
 def make_user(email, balance="0.00", **extra):
+    # KYC-verified by default so tests of other rules aren't blocked by KYC;
+    # KYC tests pass kyc_status="pending" explicitly.
+    extra.setdefault("kyc_status", "verified")
     user = User.objects.create_user(
         email=email, first_name="Test", last_name="User", password=PASSWORD, **extra
     )

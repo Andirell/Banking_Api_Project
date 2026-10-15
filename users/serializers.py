@@ -1,7 +1,12 @@
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from .models import User
 from django.core.exceptions import ValidationError
+
+
+DUPLICATE_DETAILS_ERROR = "We couldn't register an account with these details. Contact support if you already have one."
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -22,6 +27,14 @@ class UserSerializer(serializers.ModelSerializer):
             "password",
             "confirm_password",
         )
+        # DRF would add its own "user with this bvn already exists" check; the
+        # generic duplicate check in validate() replaces it.
+        extra_kwargs = {"bvn": {"validators": []}, "phone_number": {"validators": []}}
+
+    def validate_bvn(self, value):
+        if value and not (len(value) == 11 and value.isdigit()):
+            raise serializers.ValidationError("BVN must be exactly 11 digits.")
+        return value
 
     def validate(self, attrs):
         first_name = attrs.get("first_name")
@@ -46,15 +59,18 @@ class UserSerializer(serializers.ModelSerializer):
                 {"password": "Passwords do not match"}
             )
 
-        if email and User.objects.filter(email=email).exists():
+        if email and User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError(
                 {"email": "A user with this email already exists"}
             )
 
-        if bvn and User.objects.filter(bvn=bvn).exists():
-            raise serializers.ValidationError(
-                {"bvn": "A user with this BVN already exists"}
-            )
+        # One answer for any taken identifier, so sign-up can't be used to
+        # check whether a given BVN or phone number is registered.
+        phone_number = attrs.get("phone_number")
+        if (bvn and User.objects.filter(bvn=bvn).exists()) or (
+            phone_number and User.objects.filter(phone_number=phone_number).exists()
+        ):
+            raise serializers.ValidationError(DUPLICATE_DETAILS_ERROR)
 
         validate_password(password)
         return attrs
@@ -70,6 +86,13 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    # The full BVN is never sent back; the last 4 digits are enough to recognise it.
+    bvn = serializers.SerializerMethodField()
+
+    @extend_schema_field(OpenApiTypes.STR)
+    def get_bvn(self, obj):
+        return f"*******{obj.bvn[-4:]}" if obj.bvn else None
+
     class Meta:
         model = User
         fields = (

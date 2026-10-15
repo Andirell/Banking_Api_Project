@@ -38,6 +38,14 @@ class Transaction(models.Model):
     description = models.TextField(blank=True, null=True)
     # External proof of funding for deposits (bank/payment reference). Unique, so it can't be reused.
     funding_reference = models.CharField(max_length=100, unique=True, blank=True, null=True)
+    # The staff member who recorded it (deposits, balance adjustments); null for customer actions.
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="recorded_transactions",
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
