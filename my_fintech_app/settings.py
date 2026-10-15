@@ -123,10 +123,13 @@ REST_FRAMEWORK = {
         'signup': '5/hour',  # Per-IP account creation
         'transfer': '30/hour',  # Per-user transfers (also limits probing which emails have accounts)
     },
-    # Throttles identify clients by IP. Render's proxy appends the real client
-    # address to X-Forwarded-For; anything before it is client-supplied and can
-    # be faked, so only trust the last NUM_PROXIES entry.
-    'NUM_PROXIES': int(os.getenv('NUM_PROXIES', 1)),
+    # Throttles identify clients by IP, taken from X-Forwarded-For. On Render
+    # each request passes three proxies, which append (in order) the client's
+    # address, a Cloudflare edge address and Render's internal load balancer:
+    #   <client-supplied, fakeable>..., <real client>, <cloudflare>, <render lb>
+    # So the real client is the 3rd entry from the end. Anything earlier can be
+    # faked; anything later is shared by every visitor. Checked on 2026-10-15.
+    'NUM_PROXIES': int(os.getenv('NUM_PROXIES', 3)),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema'
 }
 
