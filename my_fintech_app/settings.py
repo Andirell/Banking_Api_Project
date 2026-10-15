@@ -191,6 +191,19 @@ else:
         }
     }
 
+# Cache (used by the API rate limits). Production runs several worker
+# processes; an in-memory cache would give each its own counters, multiplying
+# every limit by the worker count. The database cache is shared by all workers
+# and needs no extra service. Its table is created by `createcachetable`
+# (see build.sh). Local runs keep the default in-memory cache.
+if not DEBUG:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+            "LOCATION": "django_cache",
+        }
+    }
+
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {
