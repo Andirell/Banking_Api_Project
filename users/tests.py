@@ -890,3 +890,40 @@ class WelcomeEmailTests(TestCase):
 
         self.assertNotIn("localhost", html)
         self.assertNotIn("/onboarding", html)
+
+
+@override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.db.DatabaseCache", "LOCATION": "django_cache"}})
+class SharedRateLimitTests(TestCase):
+    """Rate-limit counters live in the database, so every worker process sees the same count."""
+
+    def setUp(self):
+        from django.core.management import call_command
+
+        call_command("createcachetable", verbosity=0)
+        cache.clear()
+
+    def test_counter_is_visible_to_another_worker(self):
+        from django.core.cache.backends.db import DatabaseCache
+
+        for _ in range(10):
+            APIClient().post("/users/verify-signin-otp/", {"email": "a@example.com", "otp": "000000"}, format="json")
+
+        # A separate cache object stands in for another gunicorn worker's process.
+        other_worker = DatabaseCache("django_cache", {})
+        self.assertEqual(len(other_worker.get("throttle_otp_127.0.0.1")), 10)
+        res = APIClient().post("/users/verify-signin-otp/", {"email": "a@example.com", "otp": "000000"}, format="json")
+        self.assertEqual(res.status_code, 429)
+
+    def test_production_uses_the_database_cache(self):
+        import os
+        import subprocess
+        import sys
+
+        env = {**os.environ, "RENDER": "true", "DEBUG": "false", "SECRET_KEY": "k" * 60}
+        out = subprocess.run(
+            [sys.executable, "-c", "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'my_fintech_app.settings'); "
+             "from django.conf import settings; print(settings.CACHES['default']['BACKEND'])"],
+            cwd=Path(__file__).resolve().parent.parent, env=env, capture_output=True, text=True,
+        )
+
+        self.assertEqual(out.stdout.strip(), "django.core.cache.backends.db.DatabaseCache", out.stderr)

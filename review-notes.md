@@ -185,7 +185,9 @@ Still open from the first review: rotate `SECRET_KEY` on Render (owner action).
 | N17 | Welcome email uses `DEFAULT_FROM_EMAIL`; the button links to `FRONTEND_URL` and is hidden when that's unset. | `users.tests.WelcomeEmailTests` |
 | N18 | Upgraded Django 6.0.8, DRF 3.17.2, Pillow 12.3.0, PyJWT 2.15.0 and sqlparse 0.6.0 (pip-audit: no known vulnerabilities). `.github/workflows/ci.yml` runs the tests, the migration check and `pip-audit` on every push. | CI |
 
-Also fixed while here: `analytics/` had no `__init__.py`, so the full test run silently skipped its tests.
+Also fixed while here:
+- `analytics/` had no `__init__.py`, so the full test run silently skipped its tests.
+- Rate-limit counters were in each worker's memory, so Render's 4 gunicorn workers each allowed the full limit (seen live: about 4× more requests got through). Production now uses Django's database cache, shared by every worker; `build.sh` creates its table. Tests: `users.tests.SharedRateLimitTests`.
 - (2026-10-15) Emails are case-insensitive and stored lowercase.
 - (2026-10-15) Swagger (`/api/docs/`) is off in production unless `API_DOCS_PUBLIC=true`.
 - (2026-10-15) `logout` only accepts your own refresh token.
