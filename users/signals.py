@@ -5,6 +5,7 @@ from django.dispatch import receiver #receiver helps listens to events and its a
 from utils.mail import send_smtp_mail
 from .models import User
 from wallets.models import Wallet
+from django.conf import settings
 from django.db import transaction
 import logging
 
@@ -23,16 +24,17 @@ def _send_welcome_email(instance):
     # account still exists, so log the failure instead of failing sign-up.
     try:
         send_smtp_mail(
-            subject= " Welcome to Vampay.com",
-            from_email="andinizzy287@gmail.com",
+            subject="Welcome to Vampay.com",
+            from_email=settings.DEFAULT_FROM_EMAIL,
             to=[instance.email],
             context={
                 "header": f"{instance.first_name} {instance.last_name}",
                 "description": "We are glad to have you bank with us.",
                 "extra_info": "Let's get started.",
-                "show_button": True,
+                # No button rather than a link to somewhere that doesn't exist.
+                "show_button": bool(settings.FRONTEND_URL),
                 "button_text": "Get Started",
-                "button_link": "http://localhost:3000/onboarding",
+                "button_link": f"{settings.FRONTEND_URL}/onboarding",
             }
         )
     except Exception:

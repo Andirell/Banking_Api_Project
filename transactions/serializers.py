@@ -60,16 +60,3 @@ class TransferSerializer(serializers.Serializer):
         if value <= 0:
             raise serializers.ValidationError("Amount must be greater than zero.")
         return value
-
-    def validate_receiver_email(self, value):
-        request = self.context.get("request")
-
-        try:
-            receiver = User.objects.get(email=value)
-        except User.DoesNotExist:
-            raise serializers.ValidationError("Receiver with this email does not exist.")
-
-        if request and request.user.email == value:
-            raise serializers.ValidationError("You cannot transfer to yourself.")
-
-        return value

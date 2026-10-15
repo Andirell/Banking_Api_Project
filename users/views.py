@@ -9,7 +9,7 @@ these to class-based views as you learn DRF.
 import logging
 import os
 
-from django.db import DatabaseError, transaction as db_transaction
+from django.db import DatabaseError, IntegrityError, transaction as db_transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -32,8 +32,9 @@ from .security import (
     issue_otp,
     revoke_user_tokens,
 )
-from .throttles import OTPRateThrottle
+from .throttles import OTPRateThrottle, SignupRateThrottle
 from loans.models import EMI, LoanApplication
+from wallets.services import lock_wallets
 from django.conf import settings
 from django.core.mail import send_mail
 from rest_framework import serializers as drf_serializers
@@ -95,10 +96,17 @@ class KYCSubmitAPIView(APIView):
         validated: Dict[str, Any] = cast(Dict[str, Any], serializer.validated_data)
 
         user = request.user
+        replaced = [f for f in (user.identity_document, user.proof_of_address) if f]
         user.identity_document = validated.get('identity_document')
         user.proof_of_address = validated.get('proof_of_address')
-        user.kyc_status = 'pending'  # Update KYC status to 'pending'
+        # New documents need a fresh review, so any earlier approval no longer applies.
+        user.kyc_status = 'pending'
+        user.kyc_approved = False
+        user.kyc_rejection_reason = None
         user.save()
+        # Don't keep superseded identity documents around.
+        for old_file in replaced:
+            old_file.storage.delete(old_file.name)
 
         return Response({"message": "KYC documents submitted successfully."}, status=status.HTTP_200_OK)
 
@@ -126,10 +134,16 @@ class KYCAdminApprovalAPIView(APIView):
         kyc_status = request.data.get("kyc_status")
 
         if kyc_status == "verified":
+            if not (user.identity_document and user.proof_of_address):
+                return Response(
+                    {"error": "User has not submitted both KYC documents"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             user.kyc_status = "verified"
             user.kyc_approved = True
         elif kyc_status == "rejected":
             user.kyc_status = "rejected"
+            user.kyc_approved = False
             user.kyc_rejection_reason = request.data.get("rejection_reason", "No reason provided")
         else:
             return Response({"error": "Invalid KYC status"}, status=status.HTTP_400_BAD_REQUEST)
@@ -178,11 +192,20 @@ class KYCDocumentDownloadAPIView(APIView):
 )
 @api_view(["POST"])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([SignupRateThrottle])
 def signup(request):
     serializer = serializers.UserSerializer(data=request.data)
 
     if serializer.is_valid():
-        serializer.save()
+        try:
+            with db_transaction.atomic():
+                serializer.save()
+        except IntegrityError:
+            # A concurrent sign-up took the same email, BVN or phone number.
+            return Response(
+                {"errors": {"non_field_errors": [serializers.DUPLICATE_DETAILS_ERROR]}},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         return Response(
             {"message": "sign up successful"},
             status=status.HTTP_201_CREATED
@@ -207,6 +230,7 @@ def signup(request):
 )
 @api_view(["POST"])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([OTPRateThrottle])
 def signin(request):
     email = request.data.get("email")
     password = request.data.get("password")
@@ -288,7 +312,7 @@ def verify_signin_otp(request):
     if not email or not otp:
         return Response({"error": "email and otp are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-    user = User.objects.filter(email=email, is_active=True).first()
+    user = User.objects.filter(email__iexact=email, is_active=True).first()
     if user is None:
         return Response({"error": "invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -450,17 +474,19 @@ def logout_view(request):
 
     try:
         token = RefreshToken(refresh_token)
-        token.blacklist()
     except TokenError:
         return Response(
             {"error": "invalid or expired refresh token"},
             status=status.HTTP_400_BAD_REQUEST
         )
-    except Exception:
+
+    # Only your own session can be ended through your account.
+    if str(token.get("user_id")) != str(request.user.pk):
         return Response(
-            {"error": "token blacklisting is not enabled"},
+            {"error": "invalid or expired refresh token"},
             status=status.HTTP_400_BAD_REQUEST
         )
+    token.blacklist()
 
     return Response(
         {"message": "logout successful"},
@@ -483,24 +509,26 @@ def delete_user(request):
     # (including other users' transfers) must survive the account.
     user = request.user
 
-    if EMI.objects.filter(loan__user=user, is_paid=False).exists():
-        return Response(
-            {"error": "account has unpaid loan installments"},
-            status=status.HTTP_409_CONFLICT
-        )
-    if LoanApplication.objects.filter(user=user, status="pending").exists():
-        return Response(
-            {"error": "account has a pending loan application"},
-            status=status.HTTP_409_CONFLICT
-        )
-    wallet = getattr(user, "wallet", None)
-    if wallet is not None and wallet.balance != 0:
-        return Response(
-            {"error": "withdraw your remaining balance before closing the account"},
-            status=status.HTTP_409_CONFLICT
-        )
-
+    # The checks and the closure happen under the wallet lock that every credit
+    # also takes, so no transfer, deposit or loan payout can land in between.
     with db_transaction.atomic():
+        (wallet,) = lock_wallets(user.pk)
+        if EMI.objects.filter(loan__user=user, is_paid=False).exists():
+            return Response(
+                {"error": "account has unpaid loan installments"},
+                status=status.HTTP_409_CONFLICT
+            )
+        if LoanApplication.objects.filter(user=user, status="pending").exists():
+            return Response(
+                {"error": "account has a pending loan application"},
+                status=status.HTTP_409_CONFLICT
+            )
+        if wallet.balance != 0:
+            return Response(
+                {"error": "withdraw your remaining balance before closing the account"},
+                status=status.HTTP_409_CONFLICT
+            )
+
         for document in (user.identity_document, user.proof_of_address):
             if document:
                 document.delete(save=False)
@@ -513,6 +541,7 @@ def delete_user(request):
         user.date_of_birth = None
         user.nationality = None
         user.is_active = False
+        user.closed_at = timezone.now()
         user.set_unusable_password()
         user.save()
         revoke_user_tokens(user)
@@ -592,6 +621,12 @@ def unblock_user(request, id):
         return Response(
             {"error": "user not found"},
             status=status.HTTP_404_NOT_FOUND
+        )
+
+    if user.closed_at is not None:
+        return Response(
+            {"error": "closed accounts cannot be reactivated"},
+            status=status.HTTP_400_BAD_REQUEST
         )
 
     user.is_active = True
@@ -705,7 +740,7 @@ def request_password_reset(request):
         status=status.HTTP_200_OK
     )
 
-    user = User.objects.filter(email=email, is_active=True).first()
+    user = User.objects.filter(email__iexact=email, is_active=True).first()
     if user is None:
         return generic
 
@@ -754,7 +789,7 @@ def verify_password_reset_otp(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
-    user = User.objects.filter(email=email, is_active=True).first()
+    user = User.objects.filter(email__iexact=email, is_active=True).first()
     otp_obj = check_otp(user, "password_reset", otp) if user else None
 
     # Record the verification on the challenge itself; it still expires at
@@ -804,7 +839,7 @@ def reset_password(request):
         OTP.objects.select_related("user").filter(pk=otp_id, purpose="password_reset").first()
         if otp_id else None
     )
-    if otp_obj is None or otp_obj.user.email != email:
+    if otp_obj is None or otp_obj.user.email != str(email).strip().lower():
         return Response(
             {"error": "invalid password reset session"},
             status=status.HTTP_400_BAD_REQUEST
@@ -834,6 +869,9 @@ def reset_password(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
         user.set_password(new_password)
+        # Proving control of the email is a legitimate way out of a lockout.
+        user.failed_signin_attempts = 0
+        user.signin_locked_until = None
         user.save()
         revoke_user_tokens(user)
 

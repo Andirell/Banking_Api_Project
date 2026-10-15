@@ -1,10 +1,12 @@
 from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
 
 urlpatterns = [
     path("signup/", views.signup, name="signup"),
     path("signin/", views.signin, name="signin"),
     path("logout/", views.logout_view, name="logout"),
+    path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("me/", views.get_me, name="get_me"),
     path('kyc/submit/', views.KYCSubmitAPIView.as_view(), name='kyc_submit'),  # User submits KYC
     path('kyc/admin/approve/<int:user_id>/', views.KYCAdminApprovalAPIView.as_view(), name='kyc_admin_approve'),  # Admin approves/rejects KYC

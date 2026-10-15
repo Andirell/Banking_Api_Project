@@ -18,6 +18,7 @@ from django.utils import timezone
 from PIL import Image
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from loans.models import EMI, LoanApplication
 from transactions.models import Transaction
@@ -511,3 +512,381 @@ class ProductionSecuritySettingsTests(TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class SigninLockoutTests(TestCase):
+    """N1: password guessing is capped per account (API and admin) and per IP."""
+
+    def setUp(self):
+        cache.clear()
+        self.user = make_user("user@example.com")
+        self.client = APIClient()
+
+    def signin(self, password=PASSWORD, ip="198.51.100.1"):
+        return self.client.post(
+            "/users/signin/", {"email": "user@example.com", "password": password},
+            format="json", REMOTE_ADDR=ip,
+        )
+
+    def fail(self, times):
+        # Spread over many IPs so only the per-account lockout is being tested.
+        for i in range(times):
+            self.signin("wrong-password", ip=f"198.51.100.{10 + i}")
+
+    def test_correct_password_refused_after_five_failures(self):
+        self.fail(5)
+        res = self.signin()
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_four_failures_do_not_lock(self):
+        self.fail(4)
+
+        self.assertEqual(self.signin().status_code, 200)
+
+    def test_success_resets_the_counter(self):
+        self.fail(4)
+        self.signin()
+        self.fail(4)
+
+        self.assertEqual(self.signin().status_code, 200)
+
+    def test_lock_expires(self):
+        self.fail(5)
+        User.objects.filter(pk=self.user.pk).update(signin_locked_until=timezone.now() - timedelta(seconds=1))
+
+        self.assertEqual(self.signin().status_code, 200)
+
+    @override_settings(STORAGES={
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    })
+    def test_admin_login_is_locked_too(self):
+        staff = make_staff()
+        for _ in range(5):
+            self.client.post("/admin/login/", {"username": staff.email, "password": "wrong-password"})
+        self.client.post("/admin/login/", {"username": staff.email, "password": PASSWORD})
+
+        self.assertFalse(self.client.session.get("_auth_user_id"), "admin login succeeded while locked")
+
+    def test_password_reset_clears_the_lock(self):
+        self.fail(5)
+        self.client.post("/users/request-password-reset/", {"email": "user@example.com"}, format="json")
+        self.client.post(
+            "/users/verify-password-reset-otp/",
+            {"email": "user@example.com", "otp": last_emailed_code()}, format="json",
+        )
+        self.client.post(
+            "/users/reset-password/",
+            {"email": "user@example.com", "new_password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD},
+            format="json",
+        )
+
+        self.assertEqual(self.signin(NEW_PASSWORD).status_code, 200)
+
+    def test_signin_is_throttled_per_ip(self):
+        for _ in range(10):
+            self.client.post(
+                "/users/signin/", {"email": "nobody@example.com", "password": "x"},
+                format="json", REMOTE_ADDR="198.51.100.1",
+            )
+
+        self.assertEqual(self.signin().status_code, 429)
+
+
+class ThrottleIdentityTests(TestCase):
+    """N2: a client-supplied X-Forwarded-For prefix can't give each request a fresh rate-limit bucket."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_spoofed_forwarded_for_does_not_reset_the_limit(self):
+        client = APIClient()
+        for i in range(11):
+            # What Render forwards: the client's fake value, then the real address it appended.
+            res = client.post(
+                "/users/verify-signin-otp/", {"email": "a@example.com", "otp": "000000"}, format="json",
+                HTTP_X_FORWARDED_FOR=f"10.0.0.{i}, 203.0.113.7",
+            )
+
+        self.assertEqual(res.status_code, 429)
+
+
+SIGNUP = {
+    "first_name": "New", "last_name": "Customer", "email": "new@example.com",
+    "password": PASSWORD, "confirm_password": PASSWORD,
+}
+
+
+class SignupPrivacyTests(TestCase):
+    """N6/N7: sign-up doesn't reveal registered BVNs or phones, and is rate limited."""
+
+    def setUp(self):
+        cache.clear()
+        make_user("existing@example.com", bvn="12345678901", phone_number="08030000000")
+
+    def signup(self, **fields):
+        return APIClient().post("/users/signup/", {**SIGNUP, **fields}, format="json")
+
+    def test_taken_bvn_and_phone_get_the_same_generic_answer(self):
+        by_bvn = self.signup(bvn="12345678901")
+        by_phone = self.signup(email="new2@example.com", phone_number="08030000000")
+
+        self.assertEqual(by_bvn.status_code, 400)
+        self.assertEqual(by_bvn.data, by_phone.data)
+        self.assertNotIn("bvn", str(by_bvn.data).lower())
+        self.assertNotIn("phone", str(by_phone.data).lower())
+
+    def test_duplicate_phone_is_a_400_not_a_500(self):
+        from users.serializers import UserSerializer
+
+        # A concurrent sign-up takes the number after the pre-check has passed.
+        with patch.object(UserSerializer, "validate", lambda self, attrs: attrs):
+            res = self.signup(phone_number="08030000000")
+
+        self.assertEqual(res.status_code, 400)
+
+    def test_bvn_must_be_11_digits(self):
+        self.assertEqual(self.signup(bvn="12345").status_code, 400)
+
+    def test_profile_masks_bvn(self):
+        client, _ = auth_client(User.objects.get(email="existing@example.com"))
+        res = client.get("/users/me/")
+
+        self.assertEqual(res.data["bvn"], "*******8901")
+
+    def test_signup_is_rate_limited_per_ip(self):
+        for i in range(5):
+            self.assertEqual(self.signup(email=f"user{i}@example.com").status_code, 201)
+
+        self.assertEqual(self.signup(email="user5@example.com").status_code, 429)
+
+
+class KYCReviewTests(TestCase):
+    """N8: approval needs documents, and new documents reset an earlier approval."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        override = override_settings(PRIVATE_MEDIA_ROOT=self._tmp.name)
+        override.enable()
+        self.addCleanup(override.disable)
+        self.customer = make_user("customer@example.com", kyc_status="pending")
+        self.staff, _ = auth_client(make_staff())
+
+    def submit(self):
+        client, _ = auth_client(self.customer)
+        return client.post(
+            "/users/kyc/submit/",
+            {"identity_document": _png("passport.png"), "proof_of_address": _png("bill.png")},
+            format="multipart",
+        )
+
+    def approve(self):
+        return self.staff.post(f"/users/kyc/admin/approve/{self.customer.pk}/", {"kyc_status": "verified"}, format="json")
+
+    def test_cannot_approve_without_documents(self):
+        self.assertEqual(self.approve().status_code, 400)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.kyc_status, "pending")
+
+    def test_resubmission_resets_approval_and_deletes_old_files(self):
+        self.submit()
+        self.approve()
+        self.customer.refresh_from_db()
+        old_path = Path(self.customer.identity_document.path)
+
+        self.submit()
+        self.customer.refresh_from_db()
+
+        self.assertEqual(self.customer.kyc_status, "pending")
+        self.assertFalse(self.customer.kyc_approved)
+        self.assertFalse(old_path.exists())
+        self.assertTrue(Path(self.customer.identity_document.path).exists())
+
+
+class AccountClosureRaceTests(TestCase):
+    """N9: money that arrives during closure blocks it; closed accounts stay closed."""
+
+    def setUp(self):
+        self.user = make_user("closing@example.com")
+        self.client, _ = auth_client(self.user)
+
+    def test_credit_landing_after_the_first_look_blocks_closure(self):
+        from wallets import services
+        from wallets.models import Wallet
+
+        def transfer_lands_first(*user_ids):
+            Wallet.objects.filter(user_id=self.user.pk).update(balance=Decimal("5.00"))
+            return services.lock_wallets(*user_ids)
+
+        with patch("users.views.lock_wallets", side_effect=transfer_lands_first):
+            res = self.client.delete("/users/delete/")
+
+        self.assertEqual(res.status_code, 409)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+
+    def test_closed_account_cannot_be_unblocked(self):
+        self.client.delete("/users/delete/")
+        admin, _ = auth_client(make_staff())
+
+        res = admin.patch(f"/users/unblock/{self.user.pk}/")
+
+        self.assertEqual(res.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+
+    def test_blocked_account_can_still_be_unblocked(self):
+        admin, _ = auth_client(make_staff())
+        admin.patch(f"/users/block/{self.user.pk}/")
+
+        self.assertEqual(admin.patch(f"/users/unblock/{self.user.pk}/").status_code, 200)
+
+
+class TokenLifetimeTests(TestCase):
+    """N10: short access tokens; refresh tokens rotate and work once."""
+
+    def setUp(self):
+        self.user = make_user("user@example.com")
+        self.refresh = str(RefreshToken.for_user(self.user))
+
+    def refresh_with(self, token):
+        return APIClient().post("/users/token/refresh/", {"refresh": token}, format="json")
+
+    def test_access_token_lives_at_most_15_minutes(self):
+        access = RefreshToken.for_user(self.user).access_token
+
+        self.assertLessEqual(access["exp"] - access["iat"], 15 * 60)
+
+    def test_refresh_rotates_and_old_token_is_single_use(self):
+        first = self.refresh_with(self.refresh)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertIn("access", first.data)
+        self.assertNotEqual(first.data["refresh"], self.refresh)
+        self.assertEqual(self.refresh_with(self.refresh).status_code, 401)
+
+    def test_refresh_refused_after_password_change(self):
+        client, _ = auth_client(self.user)
+        client.post(
+            "/users/change-password/",
+            {"old_password": PASSWORD, "new_password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD},
+            format="json",
+        )
+
+        self.assertEqual(self.refresh_with(self.refresh).status_code, 401)
+
+
+class EmailCaseTests(TestCase):
+    """N12: an email identifies one account whatever its case."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_signup_with_different_case_is_a_duplicate(self):
+        make_user("alice@example.com")
+        res = APIClient().post("/users/signup/", {**SIGNUP, "email": "Alice@Example.com"}, format="json")
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(User.objects.filter(email__iexact="alice@example.com").count(), 1)
+
+    def test_email_is_stored_lowercase_and_signin_ignores_case(self):
+        make_user("Bob@Example.COM")
+
+        self.assertTrue(User.objects.filter(email="bob@example.com").exists())
+        res = APIClient().post("/users/signin/", {"email": "BOB@example.com", "password": PASSWORD}, format="json")
+        self.assertEqual(res.status_code, 200)
+
+    def test_database_rejects_case_variant(self):
+        from django.db import IntegrityError, transaction
+
+        make_user("carol@example.com")
+        other = make_user("other@example.com")
+        # .update() bypasses save()'s lowercasing, so only the DB constraint can stop this.
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            User.objects.filter(pk=other.pk).update(email="CAROL@example.com")
+
+
+class APIDocsVisibilityTests(TestCase):
+    """N13: Swagger and the schema are served only when API_DOCS_PUBLIC is on."""
+
+    def urls_with(self, public):
+        import my_fintech_app.urls as root_urls
+
+        with override_settings(API_DOCS_PUBLIC=public):
+            patterns = [str(p.pattern) for p in importlib.reload(root_urls).urlpatterns]
+        importlib.reload(root_urls)
+        return patterns
+
+    def test_docs_hidden_when_switched_off(self):
+        patterns = self.urls_with(False)
+
+        self.assertNotIn("api/docs/", patterns)
+        self.assertNotIn("api/schema/", patterns)
+
+    def test_docs_served_when_switched_on(self):
+        self.assertIn("api/docs/", self.urls_with(True))
+
+    def test_production_default_is_off(self):
+        import os
+        import subprocess
+        import sys
+
+        env = {**os.environ, "RENDER": "true", "DEBUG": "false", "SECRET_KEY": "k" * 60}
+        env.pop("API_DOCS_PUBLIC", None)
+        out = subprocess.run(
+            [sys.executable, "-c", "import django, os; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'my_fintech_app.settings'); "
+             "from django.conf import settings; print(settings.API_DOCS_PUBLIC)"],
+            cwd=Path(__file__).resolve().parent.parent, env=env, capture_output=True, text=True,
+        )
+
+        self.assertEqual(out.stdout.strip(), "False", out.stderr)
+
+
+class LogoutOwnershipTests(TestCase):
+    """N16: you can only end your own session."""
+
+    def test_cannot_blacklist_someone_elses_refresh_token(self):
+        victim_refresh = RefreshToken.for_user(make_user("victim@example.com"))
+        client, _ = auth_client(make_user("attacker@example.com"))
+
+        res = client.post("/users/logout/", {"refresh_token": str(victim_refresh)}, format="json")
+
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(BlacklistedToken.objects.filter(token__jti=victim_refresh["jti"]).exists())
+
+    def test_own_token_is_blacklisted(self):
+        client, refresh = auth_client(make_user("user@example.com"))
+
+        res = client.post("/users/logout/", {"refresh_token": str(refresh)}, format="json")
+
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(BlacklistedToken.objects.filter(token__jti=refresh["jti"]).exists())
+
+
+class WelcomeEmailTests(TestCase):
+    """N17: the welcome email uses the configured sender and never links to localhost."""
+
+    def signup(self):
+        cache.clear()
+        with self.captureOnCommitCallbacks(execute=True):
+            APIClient().post("/users/signup/", SIGNUP, format="json")
+        return mail.outbox[-1]
+
+    @override_settings(DEFAULT_FROM_EMAIL="hello@vampay.example", FRONTEND_URL="https://app.vampay.example")
+    def test_uses_configured_sender_and_frontend(self):
+        email = self.signup()
+        html = email.alternatives[0][0]
+
+        self.assertEqual(email.from_email, "hello@vampay.example")
+        self.assertIn("https://app.vampay.example/onboarding", html)
+        self.assertNotIn("localhost", html)
+
+    @override_settings(FRONTEND_URL="")
+    def test_no_button_without_frontend(self):
+        html = self.signup().alternatives[0][0]
+
+        self.assertNotIn("localhost", html)
+        self.assertNotIn("/onboarding", html)

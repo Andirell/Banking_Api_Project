@@ -1,4 +1,6 @@
+from django.utils.dateparse import parse_date
 from rest_framework import generics, permissions
+from rest_framework.exceptions import ValidationError
 from .models import SuspiciousActivity
 from .serializers import SuspiciousActivitySerializer
 
@@ -10,28 +12,28 @@ class FlaggedTransactionsListAPIView(generics.ListAPIView):
 
     def get_queryset(self):
         qs = SuspiciousActivity.objects.all().order_by('-flagged_at')
-        # Optional filters: risk_min, risk_max, from_date (YYYY-MM-DD), to_date (YYYY-MM-DD)
-        risk_min = self.request.GET.get('risk_min')
-        risk_max = self.request.GET.get('risk_max')
-        from_date = self.request.GET.get('from_date')
-        to_date = self.request.GET.get('to_date')
-
-        if risk_min is not None:
+        # Optional filters: risk_min, risk_max, from_date (YYYY-MM-DD), to_date (YYYY-MM-DD).
+        # A bad value is a client error, not a crash or a silently ignored filter.
+        filters = {
+            "risk_min": ("risk_score__gte", _parse_float),
+            "risk_max": ("risk_score__lte", _parse_float),
+            "from_date": ("flagged_at__date__gte", parse_date),
+            "to_date": ("flagged_at__date__lte", parse_date),
+        }
+        for param, (lookup, parse) in filters.items():
+            raw = self.request.GET.get(param)
+            if raw in (None, ""):
+                continue
             try:
-                qs = qs.filter(risk_score__gte=float(risk_min))
+                value = parse(raw)
             except ValueError:
-                pass
-
-        if risk_max is not None:
-            try:
-                qs = qs.filter(risk_score__lte=float(risk_max))
-            except ValueError:
-                pass
-
-        if from_date:
-            qs = qs.filter(flagged_at__date__gte=from_date)
-
-        if to_date:
-            qs = qs.filter(flagged_at__date__lte=to_date)
+                value = None
+            if value is None:
+                raise ValidationError({param: f"invalid value {raw!r}"})
+            qs = qs.filter(**{lookup: value})
 
         return qs
+
+
+def _parse_float(raw):
+    return float(raw)

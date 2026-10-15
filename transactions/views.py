@@ -2,9 +2,12 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework import status, generics
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.viewsets import ReadOnlyModelViewSet
 from django.db import IntegrityError, transaction as db_transaction
+from django.conf import settings
 from users.models import User
+from users.permissions import IsKYCVerified
 from decimal import Decimal
 from typing import Any, Dict, cast, TYPE_CHECKING
 
@@ -55,6 +58,9 @@ class DepositAPIView(APIView):
         try:
             with db_transaction.atomic():
                 (wallet,) = lock_wallets(owner.pk)
+                # Re-check under the lock: the account may have been closed since the lookup.
+                if not User.objects.filter(pk=owner.pk, is_active=True).exists():
+                    return Response({"error": "User not found."}, status=status.HTTP_400_BAD_REQUEST)
                 credit(wallet, amount)
                 transaction_obj = Transaction.objects.create(
                     sender=owner,
@@ -63,6 +69,7 @@ class DepositAPIView(APIView):
                     amount=amount,
                     status="successful",
                     funding_reference=reference,
+                    created_by=request.user,
                     description=validated.get("description") or f"Deposit recorded by {request.user}",
                 )
                 flag_transaction_safely(transaction_obj)
@@ -81,7 +88,7 @@ class DepositAPIView(APIView):
 
 # 2. Withdraw View
 class WithdrawAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsKYCVerified]
 
     @extend_schema(
         summary="Withdraw money",
@@ -130,8 +137,20 @@ class WithdrawAPIView(APIView):
 
 
 
+# Same answer for an unknown, closed or blocked receiver, so transfers can't be
+# used to find out which emails have open accounts.
+RECEIVER_ERROR = "Transfer could not be completed. Check the receiver's email."
+
+
+class TransferRateThrottle(UserRateThrottle):
+    """Per-user transfer limit (rate: DEFAULT_THROTTLE_RATES['transfer'])."""
+
+    scope = "transfer"
+
+
 class TransferAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [TransferRateThrottle]
 
     @extend_schema(
         summary="Transfer money",
@@ -153,14 +172,23 @@ class TransferAPIView(APIView):
         amount = validated["amount"]
         description = validated.get("description", "")
 
-        receiver = User.objects.filter(email=validated["receiver_email"], is_active=True).first()
+        if amount > settings.UNVERIFIED_TRANSFER_LIMIT and request.user.kyc_status != "verified":
+            return Response(
+                {"error": f"Complete KYC verification to send more than {settings.UNVERIFIED_TRANSFER_LIMIT}."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        receiver = User.objects.filter(email__iexact=validated["receiver_email"], is_active=True).first()
         if receiver is None:
-            return Response({"error": "Receiver not found."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": RECEIVER_ERROR}, status=status.HTTP_400_BAD_REQUEST)
         if receiver.pk == request.user.pk:
             return Response({"error": "You cannot transfer to yourself."}, status=status.HTTP_400_BAD_REQUEST)
 
         with db_transaction.atomic():
             sender_wallet, receiver_wallet = lock_wallets(request.user.pk, receiver.pk)
+            # Re-check under the lock: the receiver may have closed their account since the lookup.
+            if not User.objects.filter(pk=receiver.pk, is_active=True).exists():
+                return Response({"error": RECEIVER_ERROR}, status=status.HTTP_400_BAD_REQUEST)
             try:
                 debit(sender_wallet, amount)
             except InsufficientFunds:

@@ -6,6 +6,10 @@ if TYPE_CHECKING:
 
 
 class UserManager(BaseUserManager["User"]):
+    def get_by_natural_key(self, username):
+        # Emails are stored lowercased; match whatever case the user typed.
+        return self.get(email__iexact=username)
+
     def create_user(self, email, first_name, last_name, password=None, **extra_fields):
         if not email:
             raise ValueError("Email is required")

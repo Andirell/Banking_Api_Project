@@ -97,14 +97,29 @@ Install Dependencies
 Install the required dependencies using pip:
 pip install -r requirements.txt
 
+Environment variables
+
+Settings are read from the environment, or from a local `.env` file (never commit it). Everything is optional locally; production (`RENDER` set) needs at least `SECRET_KEY`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SECRET_KEY` | generated into `.dev_secret_key` when DEBUG | Signs sessions and JWTs. **Required in production.** |
+| `DEBUG` | on locally, off when `RENDER` is set | Never on in production. |
+| `DATABASE_URL` | SQLite `db.sqlite3` | Postgres connection string, e.g. `postgres://user:pass@host:5432/db`. |
+| `ALLOWED_HOSTS`, `CSRF_TRUSTED_ORIGINS` | Render hostname added automatically | Extra hosts and origins, comma-separated. |
+| `EMAIL_BACKEND` | console (prints emails) | `anymail.backends.brevo.EmailBackend` on Render, or SMTP locally. |
+| `ANYMAIL_BREVO_API_KEY` | — | Brevo API key when using the Brevo backend (any `ANYMAIL_*` variable is passed to django-anymail). |
+| `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USE_TLS`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` | — / 587 / on | SMTP settings (local only; Render's free plan blocks SMTP). |
+| `EMAIL_TIMEOUT` | `10` | Seconds before giving up on the mail server. |
+| `DEFAULT_FROM_EMAIL` | `EMAIL_HOST_USER` | Sender of all emails (must be a verified sender in Brevo). |
+| `FRONTEND_URL` | empty | Customer web app, e.g. `https://app.example.com`. Emails link to it; with no value they have no button. |
+| `API_DOCS_PUBLIC` | same as DEBUG | Serve Swagger (`/api/docs/`) and the schema. Off in production unless set to `true`. |
+| `UNVERIFIED_TRANSFER_LIMIT` | `5000.00` | Largest single transfer before KYC is verified. |
+| `NUM_PROXIES` | `1` | Proxies in front of the app (Render has one); used to find the real client IP for rate limits. |
+
 Setup the Database
 
-Configure your PostgreSQL database in the .env file.
-DB_NAME=your_database_name
-DB_USER=your_database_user
-DB_PASSWORD=your_database_password
-DB_HOST=localhost
-DB_PORT=5432
+Without `DATABASE_URL` the app uses SQLite. For Postgres, set `DATABASE_URL`.
 
 Run database migrations:
 python manage.py migrate
@@ -117,7 +132,7 @@ Testing the API
 You can test the endpoints using tools like Postman or Swagger.
 
 Swagger:
-After running the Django server, visit http://127.0.0.1:8000/api/docs/ to see the Swagger UI, where you can interact with the API directly.
+After running the Django server, visit http://127.0.0.1:8000/api/docs/ to see the Swagger UI, where you can interact with the API directly. On production it is only available when `API_DOCS_PUBLIC=true`.
 Postman:
 Open Postman and create requests based on the above API endpoint specifications.
 Make sure to include the Authorization header with the JWT token for endpoints that require authentication.

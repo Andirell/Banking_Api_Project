@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+      - run: pip install -r requirements.txt pip-audit
+      - name: Tests
+        run: python manage.py test
+        env:
+          EMAIL_BACKEND: django.core.mail.backends.locmem.EmailBackend
+      - name: Migrations are up to date
+        run: python manage.py makemigrations --check --dry-run
+      - name: Known vulnerabilities in dependencies
+        run: pip-audit -r requirements.txt

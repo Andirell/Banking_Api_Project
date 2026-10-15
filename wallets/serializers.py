@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 from .models import Wallet
 from users.models import User
@@ -12,19 +14,8 @@ class WalletSerializer(serializers.ModelSerializer):
         read_only_fields = ["balance"]
 
 
-class AdminWalletUpdateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Wallet
-        fields = ["balance"]
-
-# Optionally, you can add validation for the balance field to prevent negative balance
-    def validate_balance(self, value):
-        if value < 0:
-            raise serializers.ValidationError("Balance cannot be negative.")
-        return value
-
-# class UserSerializer(serializers.ModelSerializer):
-#     class Meta:
-#         model = User
-#         fields = ['email']
-
+class AdminWalletUpdateSerializer(serializers.Serializer):
+    """Staff balance correction. Like a deposit, it must be justified and referenced."""
+    balance = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal("0"))
+    reason = serializers.CharField(max_length=255, write_only=True)
+    funding_reference = serializers.CharField(max_length=100, write_only=True)
