@@ -29,13 +29,11 @@ from .security import (
     OTPRateLimited,
     check_otp,
     consume_otp,
-    generate_otp,
     issue_otp,
     revoke_user_tokens,
 )
 from .throttles import OTPRateThrottle
 from loans.models import EMI, LoanApplication
-import time
 from django.conf import settings
 from django.core.mail import send_mail
 from rest_framework import serializers as drf_serializers
@@ -621,18 +619,31 @@ def unblock_user(request, id):
 @api_view(["POST"])
 @permission_classes([permissions.IsAuthenticated])
 def send_otp_view(request):
-    otp = generate_otp()
+    # Stored in the database against this user, like the sign-in and reset
+    # codes, so the attempt and issuance caps apply here too.
+    try:
+        otp = issue_otp(request.user, "verify")
+    except OTPRateLimited:
+        return Response(
+            {"error": "too many codes requested, try again later"},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
 
-    request.session["otp_code"] = otp
-    request.session["otp_expiry"] = time.time() + 300
-
-    send_mail(
-        subject="Your OTP Code",
-        message=f"Your OTP is {otp}. It will expire in 5 minutes.",
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[request.user.email],
-        fail_silently=False,
-    )
+    try:
+        send_mail(
+            subject="Your OTP Code",
+            message=f"Your OTP is {otp}. It will expire in 5 minutes.",
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[request.user.email],
+            fail_silently=False,
+        )
+    except Exception:
+        logger.exception("Could not email OTP to user %s", request.user.pk)
+        OTP.objects.filter(user=request.user, purpose="verify", is_used=False).update(is_used=True)
+        return Response(
+            {"error": "could not send the code, try again later"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
     return Response(
         {"message": "otp sent successfully"},
@@ -653,33 +664,12 @@ def send_otp_view(request):
 @api_view(["POST"])
 @permission_classes([permissions.IsAuthenticated])
 def verify_otp_view(request):
-    otp = request.data.get("otp")
-
-    saved_otp = request.session.get("otp_code")
-    saved_expiry = request.session.get("otp_expiry")
-
-    if not saved_otp or not saved_expiry:
+    otp_obj = check_otp(request.user, "verify", request.data.get("otp"))
+    if otp_obj is None or not consume_otp(otp_obj.pk, user=request.user, purpose="verify"):
         return Response(
-            {"error": "no otp found, request a new one"},
+            {"error": "invalid or expired otp, request a new one"},
             status=status.HTTP_400_BAD_REQUEST
         )
-
-    if time.time() > saved_expiry:
-        request.session.pop("otp_code", None)
-        request.session.pop("otp_expiry", None)
-        return Response(
-            {"error": "otp has expired"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    if otp != saved_otp:
-        return Response(
-            {"error": "invalid otp"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    request.session.pop("otp_code", None)
-    request.session.pop("otp_expiry", None)
 
     return Response(
         {"message": "otp verified successfully"},
