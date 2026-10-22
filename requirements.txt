@@ -2,7 +2,7 @@ asgiref==3.11.1
 attrs==26.1.0
 Django==6.0.8
 django-filter==25.2
-djangorestframework==3.17.2
+djangorestframework==3.18.3
 djangorestframework_simplejwt==5.5.1
 django-anymail[resend,brevo,sendgrid,mailgun]==15.2
 drf-spectacular==0.29.0
@@ -11,7 +11,7 @@ gunicorn>=23.0.0
 inflection==0.5.1
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
-pillow==12.3.0
+pillow==13.0.0
 psycopg2-binary>=2.9.10
 PyJWT==2.15.0
 python-dotenv==1.2.2
