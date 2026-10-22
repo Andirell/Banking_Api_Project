@@ -9,3 +9,11 @@ __pycache__/
 db.sqlite3
 media/
 private_media/
+
+# Local editor and tool settings
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.DS_Store
+.vscode/
+.idea/

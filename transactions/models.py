@@ -1,11 +1,15 @@
-from django.db import models
-from django.conf import settings
+import uuid
 from decimal import Decimal
 
+from django.conf import settings
 from django.core.validators import MinValueValidator
-import uuid  # A unique identifier
+from django.db import models
+
 
 class Transaction(models.Model):
+    # Every change to a wallet balance creates one of these, so we always
+    # have a full history of where money came from and went.
+
     TRANSACTION_TYPE_CHOICES = (
         ("deposit", "Deposit"),
         ("withdraw", "Withdraw"),
@@ -17,30 +21,31 @@ class Transaction(models.Model):
         ("successful", "Successful"),
         ("failed", "Failed"),
     )
-    
-    # Add a unique reference for each transaction
+
+    # A unique id we can show to customers, e.g. on a receipt
     reference = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    # PROTECT: transactions are never deleted, even if the account is closed
     sender = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,  # financial history outlives accounts
+        on_delete=models.PROTECT,
         related_name="sent_transactions"
     )
     receiver = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,  # never cascade into another user's records
+        on_delete=models.PROTECT,
         related_name="received_transactions",
         null=True,
         blank=True
     )
-    
-    # The type of transaction (deposit, withdraw, transfer)
+
     transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE_CHOICES)
     amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal("0.01"))])
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     description = models.TextField(blank=True, null=True)
-    # External proof of funding for deposits (bank/payment reference). Unique, so it can't be reused.
+    # For deposits: the bank/payment reference of the real money we received.
+    # It is unique, so the same payment can't be used to credit a wallet twice.
     funding_reference = models.CharField(max_length=100, unique=True, blank=True, null=True)
-    # The staff member who recorded it (deposits, balance adjustments); null for customer actions.
+    # The staff member who recorded it (empty for things customers did themselves)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,

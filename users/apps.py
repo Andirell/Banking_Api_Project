@@ -5,4 +5,5 @@ class UsersConfig(AppConfig):
     name = 'users'
 
     def ready(self):
-        import users.signals
+        # Load signals.py so new users get a wallet and a welcome email
+        import users.signals  # noqa: F401

@@ -1,6 +1,7 @@
 ## Banking API Application ##
 
 > **New here or testing the latest changes?** See [TESTING.md](TESTING.md) for what's new (2026-10-14), how to start the app locally, and a step-by-step walkthrough.
+> **Changing the code?** Read [DEVELOPMENT.md](DEVELOPMENT.md) first. It explains how the apps fit together and the security rules to follow.
 Overview
 
 The Banking API is a backend service for a Digital Banking System built using Django and Django REST Framework (DRF). This API allows users to interact with the system by creating accounts, managing wallets, making transactions, applying for loans, and more.
