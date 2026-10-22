@@ -1,14 +1,18 @@
+from datetime import timedelta
+
+from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.db.models.functions import Lower
-from django.contrib.auth.models import AbstractUser
-from .managers import UserManager
-from decimal import Decimal
 from django.utils import timezone
-from datetime import timedelta
+
+from .managers import UserManager
 from .storage import private_kyc_storage
 
+
 class User(AbstractUser):
-    username= None
+    # We log in with email, so we don't need Django's username field
+    username = None
+
     ROLE_CHOICES = (
         ('customer', 'Customer'),
         ('merchant', 'Merchant'),
@@ -24,7 +28,7 @@ class User(AbstractUser):
     email = models.EmailField(unique=True)
     first_name = models.CharField(max_length=50)
     last_name = models.CharField(max_length=50)
-    nationality = models.TextField( blank=True, null=True)
+    nationality = models.TextField(blank=True, null=True)
     bvn = models.CharField(max_length=11, unique=True, blank=True, null=True)
     date_of_birth = models.DateField(blank=True, null=True)
     address = models.TextField(blank=True, null=True)
@@ -32,33 +36,33 @@ class User(AbstractUser):
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="customer")
     kyc_status = models.CharField(max_length=20, choices=KYC_CHOICES, default="pending")
     created_at = models.DateTimeField(auto_now_add=True)
-     # KYC Document Fields
-    identity_document = models.ImageField(upload_to="kyc_documents/", storage=private_kyc_storage, blank=True, null=True)  # User's ID document
-    proof_of_address = models.ImageField(upload_to="kyc_documents/", storage=private_kyc_storage, blank=True, null=True)  # Address proof document
-    # Admin KYC Approval Fields
-    kyc_approved = models.BooleanField(default=False)  # Tracks whether KYC is approved
-    kyc_rejection_reason = models.TextField(blank=True, null=True)  # Reason for rejection
-    # Password lockout (see users.backends.LockoutModelBackend)
+
+    # KYC documents. They are saved in private storage (no public URL).
+    identity_document = models.ImageField(upload_to="kyc_documents/", storage=private_kyc_storage, blank=True, null=True)
+    proof_of_address = models.ImageField(upload_to="kyc_documents/", storage=private_kyc_storage, blank=True, null=True)
+    kyc_approved = models.BooleanField(default=False)
+    kyc_rejection_reason = models.TextField(blank=True, null=True)
+
+    # For locking the account after too many wrong passwords (see users/backends.py)
     failed_signin_attempts = models.PositiveSmallIntegerField(default=0)
     signin_locked_until = models.DateTimeField(blank=True, null=True)
-    # Set when the customer closes the account; a closed account is never reactivated.
+
+    # Set when the customer closes their account. A closed account can't be reopened.
     closed_at = models.DateTimeField(blank=True, null=True)
-
-
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ["first_name", "last_name"]
 
-    objects: UserManager = UserManager()  # type: ignore
+    objects = UserManager()
 
     class Meta(AbstractUser.Meta):
         constraints = [
-            # Emails identify accounts (sign-in, transfers), so "A@x.com" and
-            # "a@x.com" must not be two different people.
+            # "Ada@mail.com" and "ada@mail.com" must be the same account
             models.UniqueConstraint(Lower("email"), name="user_email_ci_unique"),
         ]
 
     def save(self, *args, **kwargs):
+        # Always save emails in lowercase
         if self.email:
             self.email = self.email.strip().lower()
         super().save(*args, **kwargs)
@@ -68,12 +72,8 @@ class User(AbstractUser):
 
 
 class OTP(models.Model):
-    """One-time password model for login and password reset flows.
-
-    We store OTPs in the database so the login flow can be stateless and
-    work with JWTs (no reliance on Django sessions). An OTP is short-lived
-    and marked used after successful verification.
-    """
+    # A one-time code we email to the user (for sign-in, password reset
+    # or verification). See users/security.py for how they are used.
     PURPOSE_CHOICES = (
         ("signin", "Sign in"),
         ("password_reset", "Password reset"),
@@ -86,13 +86,16 @@ class OTP(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     is_used = models.BooleanField(default=False)
-    attempts = models.PositiveSmallIntegerField(default=0)  # failed guesses against this challenge
-    verified_at = models.DateTimeField(blank=True, null=True)  # password reset: code checked, reset not done yet
+    # How many wrong guesses were made for this code
+    attempts = models.PositiveSmallIntegerField(default=0)
+    # Password reset only: when the code was checked (the reset happens in a second step)
+    verified_at = models.DateTimeField(blank=True, null=True)
 
-    def is_expired(self) -> bool:
+    def is_expired(self):
         return timezone.now() > self.expires_at
 
     @classmethod
-    def create_for_user(cls, user, code: str, purpose: str = "signin", lifetime_seconds: int = 300):
+    def create_for_user(cls, user, code, purpose="signin", lifetime_seconds=300):
+        # Codes last 5 minutes by default
         expires = timezone.now() + timedelta(seconds=lifetime_seconds)
         return cls.objects.create(user=user, code=code, purpose=purpose, expires_at=expires)

@@ -4,8 +4,8 @@ from transactions.serializers import TransactionSerializer
 from wallets.serializers import WalletSerializer
 
 
-# Common response/request shapes used across the project to avoid duplicate
-# inline_serializer components in generated OpenAPI schema.
+# Request and response shapes for the Swagger docs (/api/docs/).
+# They live here so several views can share them.
 MessageResponse = inline_serializer(
     name="MessageResponse",
     fields={
@@ -44,7 +44,7 @@ SignInResponse = inline_serializer(
     },
 )
 
-# Wallet and Transaction wrappers
+# Wallets and transactions
 WalletDetailResponse = inline_serializer(
     name="WalletDetailResponse",
     fields={
@@ -86,7 +86,7 @@ TransactionActionResponse = inline_serializer(
     },
 )
 
-# User request/response shapes used by multiple views
+# Users
 LogoutRequest = inline_serializer(
     name="LogoutRequest",
     fields={
@@ -110,7 +110,7 @@ OTPRequest = inline_serializer(
     },
 )
 
-# Specific request shape used to verify OTP during signin (contains email + otp)
+# Step 2 of sign in
 VerifySigninOTPRequest = inline_serializer(
     name="VerifySigninOTPRequest",
     fields={

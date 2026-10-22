@@ -1,33 +1,42 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
-from rest_framework import status, generics
-from rest_framework.throttling import UserRateThrottle
-from rest_framework.viewsets import ReadOnlyModelViewSet
-from django.db import IntegrityError, transaction as db_transaction
+import logging
+
 from django.conf import settings
+from django.db import IntegrityError, transaction as db_transaction
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
+from rest_framework import status
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
+from rest_framework.views import APIView
+from rest_framework.viewsets import ReadOnlyModelViewSet
+
+from analytics.utils import flag_transaction_safely
 from users.models import User
 from users.permissions import IsKYCVerified
-from decimal import Decimal
-from typing import Any, Dict, cast, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from django.db.models import Model
-from .models import Transaction
-from .serializers import DepositSerializer, WithdrawSerializer, TransferSerializer, TransactionSerializer
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter
-from drf_spectacular.types import OpenApiTypes
-from utils.schemas import TransactionActionResponse, ErrorResponse, ValidationErrorResponse
-from rest_framework import serializers
-from rest_framework.exceptions import NotFound
-from analytics.utils import flag_transaction_safely
+from utils.schemas import ErrorResponse, TransactionActionResponse, ValidationErrorResponse
 from wallets.services import InsufficientFunds, credit, debit, lock_wallets
-import logging
-logger = logging.getLogger(__name__)  # Set up logging
+
+from .models import Transaction
+from .serializers import DepositSerializer, TransactionSerializer, TransferSerializer, WithdrawSerializer
+
+logger = logging.getLogger(__name__)
+
+DUPLICATE_REFERENCE_ERROR = "This funding reference has already been used."
+
+# We give the same error whether the receiver doesn't exist, is closed or is
+# blocked. Otherwise people could use transfers to check which emails have accounts.
+RECEIVER_ERROR = "Transfer could not be completed. Check the receiver's email."
+
+
+def is_active_user(user_id):
+    return User.objects.filter(pk=user_id, is_active=True).exists()
+
 
 class DepositAPIView(APIView):
-    # Customers can't credit themselves: a deposit is staff recording money that
-    # actually arrived, identified by a funding reference that can't be reused.
+    # Staff only. Customers can't add money to their own wallet. A deposit is
+    # staff recording that real money arrived, with a reference that can only
+    # be used once.
     permission_classes = [IsAdminUser]
 
     @extend_schema(
@@ -35,32 +44,32 @@ class DepositAPIView(APIView):
         description="Credit a user's wallet for funds received externally. Requires a unique funding reference.",
         tags=["Transactions"],
         request=DepositSerializer,
-        responses={
-            201: TransactionActionResponse,
-            400: ValidationErrorResponse,
-            409: ErrorResponse,
-        },
+        responses={201: TransactionActionResponse, 400: ValidationErrorResponse, 409: ErrorResponse},
     )
     def post(self, request):
         serializer = DepositSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        validated: Dict[str, Any] = cast(Dict[str, Any], serializer.validated_data)
+        data = serializer.validated_data
 
-        amount: Decimal = validated["amount"]
-        reference: str = validated["funding_reference"]
-        owner = User.objects.filter(pk=validated["user_id"], is_active=True).first()
+        amount = data["amount"]
+        reference = data["funding_reference"]
+
+        owner = User.objects.filter(pk=data["user_id"], is_active=True).first()
         if owner is None:
             return Response({"error": "User not found."}, status=status.HTTP_400_BAD_REQUEST)
 
         if Transaction.objects.filter(funding_reference=reference).exists():
-            return Response({"error": "This funding reference has already been used."}, status=status.HTTP_409_CONFLICT)
+            return Response({"error": DUPLICATE_REFERENCE_ERROR}, status=status.HTTP_409_CONFLICT)
 
         try:
             with db_transaction.atomic():
                 (wallet,) = lock_wallets(owner.pk)
-                # Re-check under the lock: the account may have been closed since the lookup.
-                if not User.objects.filter(pk=owner.pk, is_active=True).exists():
+
+                # Check again now that the wallet is locked: the account
+                # might have been closed in the meantime
+                if not is_active_user(owner.pk):
                     return Response({"error": "User not found."}, status=status.HTTP_400_BAD_REQUEST)
+
                 credit(wallet, amount)
                 transaction_obj = Transaction.objects.create(
                     sender=owner,
@@ -70,12 +79,13 @@ class DepositAPIView(APIView):
                     status="successful",
                     funding_reference=reference,
                     created_by=request.user,
-                    description=validated.get("description") or f"Deposit recorded by {request.user}",
+                    description=data.get("description") or f"Deposit recorded by {request.user}",
                 )
                 flag_transaction_safely(transaction_obj)
         except IntegrityError:
-            # Lost a race with another request using the same reference; nothing was credited.
-            return Response({"error": "This funding reference has already been used."}, status=status.HTTP_409_CONFLICT)
+            # Another request used the same reference at the same moment.
+            # The database refused ours, so nothing was credited.
+            return Response({"error": DUPLICATE_REFERENCE_ERROR}, status=status.HTTP_409_CONFLICT)
 
         return Response(
             {
@@ -86,8 +96,9 @@ class DepositAPIView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
-# 2. Withdraw View
+
 class WithdrawAPIView(APIView):
+    # Taking money out needs verified KYC
     permission_classes = [IsAuthenticated, IsKYCVerified]
 
     @extend_schema(
@@ -95,18 +106,13 @@ class WithdrawAPIView(APIView):
         description="Withdraw money from the authenticated user's balance.",
         tags=["Transactions"],
         request=WithdrawSerializer,
-        responses={
-            201: TransactionActionResponse,
-            400: ErrorResponse,
-        },
+        responses={201: TransactionActionResponse, 400: ErrorResponse},
     )
     def post(self, request):
         serializer = WithdrawSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        validated: Dict[str, Any] = cast(Dict[str, Any], serializer.validated_data)
-
-        amount: Decimal = validated["amount"]
-        description: str = validated.get("description", "")
+        amount = serializer.validated_data["amount"]
+        description = serializer.validated_data.get("description", "")
 
         with db_transaction.atomic():
             (wallet,) = lock_wallets(request.user.pk)
@@ -135,16 +141,8 @@ class WithdrawAPIView(APIView):
         )
 
 
-
-
-# Same answer for an unknown, closed or blocked receiver, so transfers can't be
-# used to find out which emails have open accounts.
-RECEIVER_ERROR = "Transfer could not be completed. Check the receiver's email."
-
-
 class TransferRateThrottle(UserRateThrottle):
-    """Per-user transfer limit (rate: DEFAULT_THROTTLE_RATES['transfer'])."""
-
+    # Limits how many transfers one user can make (rate is in settings.py)
     scope = "transfer"
 
 
@@ -157,28 +155,26 @@ class TransferAPIView(APIView):
         description="Transfer money from the authenticated user to another user by email.",
         tags=["Transactions"],
         request=TransferSerializer,
-        responses={
-            201: TransactionActionResponse,
-            400: ErrorResponse,
-        },
+        responses={201: TransactionActionResponse, 400: ErrorResponse},
     )
     def post(self, request):
         serializer = TransferSerializer(data=request.data, context={"request": request})
-
         if not serializer.is_valid():
             return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
-        validated = serializer.validated_data
-        amount = validated["amount"]
-        description = validated.get("description", "")
+        amount = serializer.validated_data["amount"]
+        description = serializer.validated_data.get("description", "")
+        receiver_email = serializer.validated_data["receiver_email"]
 
-        if amount > settings.UNVERIFIED_TRANSFER_LIMIT and request.user.kyc_status != "verified":
+        # Users without verified KYC can only send small amounts
+        limit = settings.UNVERIFIED_TRANSFER_LIMIT
+        if amount > limit and request.user.kyc_status != "verified":
             return Response(
-                {"error": f"Complete KYC verification to send more than {settings.UNVERIFIED_TRANSFER_LIMIT}."},
+                {"error": f"Complete KYC verification to send more than {limit}."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        receiver = User.objects.filter(email__iexact=validated["receiver_email"], is_active=True).first()
+        receiver = User.objects.filter(email__iexact=receiver_email, is_active=True).first()
         if receiver is None:
             return Response({"error": RECEIVER_ERROR}, status=status.HTTP_400_BAD_REQUEST)
         if receiver.pk == request.user.pk:
@@ -186,9 +182,12 @@ class TransferAPIView(APIView):
 
         with db_transaction.atomic():
             sender_wallet, receiver_wallet = lock_wallets(request.user.pk, receiver.pk)
-            # Re-check under the lock: the receiver may have closed their account since the lookup.
-            if not User.objects.filter(pk=receiver.pk, is_active=True).exists():
+
+            # Check again now that the wallets are locked: the receiver
+            # might have closed their account in the meantime
+            if not is_active_user(receiver.pk):
                 return Response({"error": RECEIVER_ERROR}, status=status.HTTP_400_BAD_REQUEST)
+
             try:
                 debit(sender_wallet, amount)
             except InsufficientFunds:
@@ -216,67 +215,23 @@ class TransferAPIView(APIView):
         )
 
 
-# 4. Transaction History View
-class TransactionHistoryAPIView(generics.ListAPIView):
-    permission_classes = [IsAuthenticated]
-    serializer_class = TransactionSerializer
-
-    def get_queryset(self):
-        user = self.request.user
-        return Transaction.objects.filter(sender=user).order_by('-created_at')
-
-# 5. Transaction Detail View
-class TransactionDetailAPIView(generics.RetrieveAPIView):
-    permission_classes = [IsAuthenticated]
-    serializer_class = TransactionSerializer
-
-    def get_object(self):
-        try:
-            transaction_obj = Transaction.objects.get(id=self.kwargs["pk"], sender=self.request.user)
-        except Transaction.DoesNotExist:
-            raise NotFound("Transaction not found or you don't have access to this transaction.")
-
-        return transaction_obj
-
-    def get(self, request, *args, **kwargs):
-        transaction_obj = self.get_object()
-
-        return Response(
-            {
-                "message": "Transaction retrieved successfully",
-                "data": TransactionSerializer(transaction_obj).data,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-
-# ViewSet to expose list and retrieve under a single resource path
 @extend_schema_view(
     retrieve=extend_schema(
         parameters=[
             OpenApiParameter(name="pk", description="Transaction ID", required=True, type=OpenApiTypes.INT),
-            # Some routers or tooling may present the path parameter as 'id' instead of 'pk'.
-            # Include both names so the schema generator can infer the correct integer type.
             OpenApiParameter(name="id", description="Transaction ID", required=True, type=OpenApiTypes.INT),
         ]
     )
 )
 class TransactionViewSet(ReadOnlyModelViewSet):
-    """Provides list and retrieve endpoints for the authenticated user's transactions.
+    """List or view the authenticated user's own transactions."""
 
-    Using a ViewSet + router groups the list and retrieve operations under the
-    same base path (e.g. /transactions/ and /transactions/{pk}/), which makes
-    the OpenAPI docs render them together as one resource.
-    """
     permission_classes = [IsAuthenticated]
     serializer_class = TransactionSerializer
-    # Provide a queryset attribute so drf-spectacular can inspect the model
-    # and correctly infer types for path parameters. We still restrict the
-    # actual returned queryset in get_queryset() to the requesting user.
+    # Only here so the Swagger docs know the model. get_queryset() below is
+    # what actually decides what the user can see.
     queryset = Transaction.objects.all()
-
     lookup_field = "pk"
 
     def get_queryset(self):
-        user = self.request.user
-        return Transaction.objects.filter(sender=user).order_by('-created_at')
+        return Transaction.objects.filter(sender=self.request.user).order_by("-created_at")

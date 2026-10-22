@@ -1,3 +1,3 @@
 from django.contrib import admin
 
-# Register your models here.
+# Transactions are created by the API only, never edited by hand.

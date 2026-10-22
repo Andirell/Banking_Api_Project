@@ -1,30 +1,27 @@
 import logging
-from django.db import IntegrityError, transaction as db_transaction
-from rest_framework.exceptions import ValidationError
-from rest_framework import generics, status
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.exceptions import NotFound
 
-from users.views import ErrorResponse
-from .models import Wallet
-from .serializers import WalletSerializer, AdminWalletUpdateSerializer
-from transactions.serializers import (DepositSerializer, WithdrawSerializer, TransferSerializer)
-from rest_framework import serializers
+from django.db import IntegrityError, transaction as db_transaction
 from drf_spectacular.utils import extend_schema
-from utils.schemas import WalletDetailResponse, WalletCreateResponse, WalletUpdateResponse, ErrorResponse
-from rest_framework.permissions import IsAdminUser
-from transactions.models import Transaction
+from rest_framework import generics
+from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
+
 from analytics.utils import flag_transaction_safely
+from transactions.models import Transaction
+from utils.schemas import ErrorResponse, WalletCreateResponse, WalletDetailResponse, WalletUpdateResponse
+
+from .models import Wallet
+from .serializers import AdminWalletUpdateSerializer, WalletSerializer
 from .services import credit, debit, lock_wallets
 
 logger = logging.getLogger(__name__)
 
 
-# Swagger/OpenAPI Response Schemas
-
-# Reuse wallet response shapes from utils.schemas
+def get_my_wallet(user):
+    wallet = getattr(user, "wallet", None)
+    if wallet is None:
+        raise NotFound("Wallet not found for the authenticated user")
+    return wallet
 
 
 class WalletDetailAPIView(generics.RetrieveAPIView):
@@ -36,16 +33,11 @@ class WalletDetailAPIView(generics.RetrieveAPIView):
         summary="Retrieve wallet details",
         description="Retrieve the details of the authenticated user's wallet.",
         tags=["Wallets"],
-        responses={200: WalletDetailResponse},  # Use the WalletDetailResponse schema
+        responses={200: WalletDetailResponse},
     )
-
     def get_object(self):
-        # Use getattr to satisfy type checkers (AnonymousUser/AbstractUser may not have 'wallet')
-        user = self.request.user
-        wallet = getattr(user, "wallet", None)
-        if wallet is None:
-            raise NotFound("Wallet not found for the authenticated user")
-        return wallet
+        return get_my_wallet(self.request.user)
+
 
 class WalletCreateAPIView(generics.CreateAPIView):
     queryset = Wallet.objects.all()
@@ -56,15 +48,15 @@ class WalletCreateAPIView(generics.CreateAPIView):
         summary="Create a new wallet",
         description="Create a new wallet for the authenticated user.",
         tags=["Wallets"],
-        responses={201: WalletCreateResponse},  # Use the WalletCreateResponse schema
+        responses={201: WalletCreateResponse},
     )
-
     def perform_create(self, serializer):
-        # Prevent creating multiple wallets for the same user
-        if hasattr(self.request.user, 'wallet'):
+        # Every user already gets a wallet when they sign up (see users/signals.py),
+        # so this only matters for very old accounts.
+        if hasattr(self.request.user, "wallet"):
             raise ValidationError("User already has a wallet.")
-        # Save wallet with initial zero balance; Decimal is used in model
         serializer.save(user=self.request.user, balance=0.00)
+
 
 class WalletUpdateAPIView(generics.UpdateAPIView):
     queryset = Wallet.objects.all()
@@ -72,36 +64,31 @@ class WalletUpdateAPIView(generics.UpdateAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_object(self):
-        user = self.request.user
-        wallet = getattr(user, "wallet", None)
-        if wallet is None:
-            raise NotFound("Wallet not found for the authenticated user")
-        return wallet  # Update the wallet of the authenticated user
-    
+        return get_my_wallet(self.request.user)
+
     @extend_schema(
         summary="Update wallet balance",
         description="Update the balance of the authenticated user's wallet.",
         tags=["Wallets"],
-        responses={200: WalletUpdateResponse},  # Use the WalletUpdateResponse schema
+        responses={200: WalletUpdateResponse},
     )
-     
     def perform_update(self, serializer):
-        wallet = self.get_object()
-        # Users should not be allowed to update balance directly.
-        # Only admin endpoints should modify balance. If this view is used,
-        # ignore any balance field and return the current wallet state.
+        # Customers are never allowed to set their own balance.
         raise ValidationError("Users are not allowed to modify wallet balance. Use admin endpoints.")
-    
+
+
 class WalletAdminUpdateAPIView(generics.UpdateAPIView):
-    """
-    Admin can update the wallet balance for any user.
-    """
+    """Admin can update the wallet balance for any user."""
+
+    # The change is saved as a transaction so there is always a record of
+    # who changed what and why.
     queryset = Wallet.objects.all()
     serializer_class = AdminWalletUpdateSerializer
-    permission_classes = [IsAdminUser]  # Only admins can access this view
+    permission_classes = [IsAdminUser]
 
     def get_serializer(self, *args, **kwargs):
-        # PATCH would otherwise make reason and funding_reference optional.
+        # PATCH normally makes every field optional. Here the reason and
+        # reference are always required, so we turn that off.
         kwargs["partial"] = False
         return super().get_serializer(*args, **kwargs)
 
@@ -109,46 +96,49 @@ class WalletAdminUpdateAPIView(generics.UpdateAPIView):
         summary="Admin update wallet balance",
         description="Staff correction of a wallet balance. Requires a reason and a unique funding reference; the change is audited and fraud-checked.",
         tags=["Wallets"],
-        responses={
-            200: WalletUpdateResponse,  # Custom Swagger response schema for success
-            400: ErrorResponse,  # Schema for error responses (e.g., invalid input)
-        },
+        responses={200: WalletUpdateResponse, 400: ErrorResponse},
         request=AdminWalletUpdateSerializer,
     )
-   
     def perform_update(self, serializer):
         wallet = serializer.instance
-        validated = serializer.validated_data
-        balance = validated["balance"]
-        reference = validated["funding_reference"]
+        new_balance = serializer.validated_data["balance"]
+        reference = serializer.validated_data["funding_reference"]
+        reason = serializer.validated_data["reason"]
 
-        # Lock the row so the old balance (and the audit amount) is the real
-        # current value. The change, its audit record and the fraud check commit
-        # together: if the audit can't be written, the balance change rolls back.
         try:
+            # Everything below is saved together. If the transaction record
+            # can't be saved, the balance change is undone too.
             with db_transaction.atomic():
-                (locked,) = lock_wallets(wallet.user_id)
-                old_balance = locked.balance
-                if balance == old_balance:
+                # Lock the wallet so we work with its real current balance
+                (locked_wallet,) = lock_wallets(wallet.user_id)
+                old_balance = locked_wallet.balance
+
+                if new_balance == old_balance:
                     return
-                if balance > old_balance:
-                    credit(locked, balance - old_balance)
+
+                if new_balance > old_balance:
+                    difference = new_balance - old_balance
+                    credit(locked_wallet, difference)
+                    transaction_type = "deposit"
                 else:
-                    debit(locked, old_balance - balance)
+                    difference = old_balance - new_balance
+                    debit(locked_wallet, difference)
+                    transaction_type = "withdraw"
 
                 tx = Transaction.objects.create(
-                    sender=locked.user,
+                    sender=locked_wallet.user,
                     receiver=None,
-                    transaction_type='deposit' if balance > old_balance else 'withdraw',
-                    amount=abs(balance - old_balance),
-                    status='successful',
+                    transaction_type=transaction_type,
+                    amount=difference,
+                    status="successful",
                     funding_reference=reference,
                     created_by=self.request.user,
-                    description=f'Admin balance adjustment: {validated["reason"]}',
+                    description=f"Admin balance adjustment: {reason}",
                 )
                 flag_transaction_safely(tx)
         except IntegrityError:
+            # funding_reference is unique in the database
             raise ValidationError({"funding_reference": "This funding reference has already been used."})
 
-        logger.info("Admin %s set wallet %s balance %s -> %s", self.request.user.pk, wallet.pk, old_balance, balance)
+        logger.info("Admin %s set wallet %s balance %s -> %s", self.request.user.pk, wallet.pk, old_balance, new_balance)
         wallet.refresh_from_db(fields=["balance"])

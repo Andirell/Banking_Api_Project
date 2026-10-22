@@ -1,3 +1,3 @@
 from django.contrib import admin
 
-# Register your models here.
+# Loans are approved through the /loans/admin/approve/ endpoint, not the Django admin.
