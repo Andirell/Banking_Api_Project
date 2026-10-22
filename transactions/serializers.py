@@ -1,11 +1,16 @@
 from rest_framework import serializers
-from django.contrib.auth import get_user_model
+
 from .models import Transaction
 
-User = get_user_model()
+
+def check_amount(value):
+    if value <= 0:
+        raise serializers.ValidationError("Amount must be greater than zero.")
+    return value
 
 
 class TransactionSerializer(serializers.ModelSerializer):
+    # Show emails instead of user ids
     sender = serializers.StringRelatedField()
     receiver = serializers.StringRelatedField()
 
@@ -24,21 +29,19 @@ class TransactionSerializer(serializers.ModelSerializer):
         )
 
     def validate_amount(self, value):
-        if value <= 0:
-            raise serializers.ValidationError("Amount must be greater than zero.")
-        return value
+        return check_amount(value)
+
 
 class DepositSerializer(serializers.Serializer):
-    """Staff-recorded funding. The reference ties the credit to real money received."""
+    """Staff-recorded deposit. The funding reference links it to the real payment."""
+
     user_id = serializers.IntegerField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     funding_reference = serializers.CharField(max_length=100)
     description = serializers.CharField(required=False, allow_blank=True)
 
     def validate_amount(self, value):
-        if value <= 0:
-            raise serializers.ValidationError("Amount must be greater than zero.")
-        return value
+        return check_amount(value)
 
 
 class WithdrawSerializer(serializers.Serializer):
@@ -46,9 +49,7 @@ class WithdrawSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
 
     def validate_amount(self, value):
-        if value <= 0:
-            raise serializers.ValidationError("Amount must be greater than zero.")
-        return value
+        return check_amount(value)
 
 
 class TransferSerializer(serializers.Serializer):
@@ -57,6 +58,4 @@ class TransferSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True)
 
     def validate_amount(self, value):
-        if value <= 0:
-            raise serializers.ValidationError("Amount must be greater than zero.")
-        return value
+        return check_amount(value)

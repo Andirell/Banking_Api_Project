@@ -1,13 +1,14 @@
 from rest_framework.throttling import AnonRateThrottle
 
+# The rates for these are in settings.py (DEFAULT_THROTTLE_RATES).
+# Each one needs its own "scope" so they have separate counters.
+
 
 class OTPRateThrottle(AnonRateThrottle):
-    """Per-IP limit for sign-in and the anonymous OTP endpoints (rate: DEFAULT_THROTTLE_RATES['otp'])."""
-
+    # Limits sign-in and the other OTP endpoints per IP address
     scope = "otp"
 
 
 class SignupRateThrottle(AnonRateThrottle):
-    """Per-IP limit on account creation, which also sends a welcome email (rate: DEFAULT_THROTTLE_RATES['signup'])."""
-
+    # Limits how many accounts one IP address can create
     scope = "signup"

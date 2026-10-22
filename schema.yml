@@ -4,6 +4,22 @@ info:
   version: 1.0.0
   description: A list of all my endpoints for my fintech application.
 paths:
+  /analytics/flagged-transactions/:
+    get:
+      operationId: analytics_flagged_transactions_list
+      tags:
+      - analytics
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SuspiciousActivity'
+          description: ''
   /api/schema/:
     get:
       operationId: api_schema_retrieve
@@ -150,14 +166,151 @@ paths:
                 type: object
                 additionalProperties: {}
           description: ''
+  /loans/admin/approve/:
+    post:
+      operationId: loans_admin_approve_create
+      tags:
+      - loans
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminApproveRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AdminApproveRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AdminApproveRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /loans/admin/list/:
+    get:
+      operationId: loans_admin_list_list
+      tags:
+      - loans
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LoanApplication'
+          description: ''
+  /loans/apply/:
+    post:
+      operationId: loans_apply_create
+      tags:
+      - loans
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoanApplyRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LoanApplyRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LoanApplyRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanApplyRequest'
+          description: ''
+  /loans/emis/:
+    get:
+      operationId: loans_emis_list
+      description: List unpaid EMIs for the authenticated user.
+      tags:
+      - loans
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EMIRead'
+          description: ''
+  /loans/emis/{emi_id}/pay/:
+    post:
+      operationId: loans_emis_pay_create
+      description: Pay a single EMI from the authenticated user's wallet.
+      parameters:
+      - in: path
+        name: emi_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - loans
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EMIPayResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /loans/status/{id}/:
+    get:
+      operationId: loans_status_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - loans
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanApplication'
+          description: ''
   /transactions/:
     get:
       operationId: transactions_list
-      description: List transactions where the authenticated user is the sender or
-        receiver. Supports filtering by transaction_type and status.
-      summary: List my transactions
+      description: List or view the authenticated user's own transactions.
       tags:
-      - Transactions
+      - transactions
       security:
       - jwtAuth: []
       responses:
@@ -172,17 +325,28 @@ paths:
   /transactions/{id}/:
     get:
       operationId: transactions_retrieve
-      description: Retrieve a single transaction if the authenticated user is involved
-        in it.
-      summary: Get transaction detail
+      description: List or view the authenticated user's own transactions.
       parameters:
       - in: path
         name: id
         schema:
-          type: string
+          type: integer
+        description: A unique integer value identifying this transaction.
+        required: true
+      - in: query
+        name: id
+        schema:
+          type: integer
+        description: Transaction ID
+        required: true
+      - in: query
+        name: pk
+        schema:
+          type: integer
+        description: Transaction ID
         required: true
       tags:
-      - Transactions
+      - transactions
       security:
       - jwtAuth: []
       responses:
@@ -195,8 +359,9 @@ paths:
   /transactions/deposit/:
     post:
       operationId: transactions_deposit_create
-      description: Deposit money into the authenticated user's balance.
-      summary: Deposit money
+      description: Credit a user's wallet for funds received externally. Requires
+        a unique funding reference.
+      summary: Record a deposit (staff)
       tags:
       - Transactions
       requestBody:
@@ -224,11 +389,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TransactionValidationErrorResponse'
+                $ref: '#/components/schemas/ValidationErrorResponse'
           description: ''
-  /transactions/transfer/:
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+  /transactions/send/:
     post:
-      operationId: transactions_transfer_create
+      operationId: transactions_send_create
       description: Transfer money from the authenticated user to another user by email.
       summary: Transfer money
       tags:
@@ -258,7 +429,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TransactionErrorResponse'
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /transactions/withdraw/:
     post:
@@ -292,7 +463,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TransactionErrorResponse'
+                $ref: '#/components/schemas/ErrorResponse'
           description: ''
   /users/block/{id}/:
     patch:
@@ -424,6 +595,35 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: ''
+  /users/kyc/documents/{user_id}/{document}/:
+    get:
+      operationId: users_kyc_documents_retrieve
+      description: Owner or staff only. `document` is `identity` or `address`.
+      summary: Download KYC document
+      parameters:
+      - in: path
+        name: document
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: user_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - Users
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /users/kyc/submit/:
     post:
       operationId: users_kyc_submit_create
@@ -434,15 +634,12 @@ paths:
       - Users
       requestBody:
         content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/User'
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: '#/components/schemas/User'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/User'
+              $ref: '#/components/schemas/KYCSubmit'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/KYCSubmit'
         required: true
       security:
       - jwtAuth: []
@@ -579,12 +776,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: ''
-        '404':
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-          description: ''
   /users/send-otp/:
     post:
       operationId: users_send_otp_create
@@ -676,6 +867,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ValidationErrorResponse'
+          description: ''
+  /users/token/refresh/:
+    post:
+      operationId: users_token_refresh_create
+      description: |-
+        Takes a refresh type JSON web token and returns an access type JSON web
+        token if the refresh token is valid.
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
           description: ''
   /users/unblock/{id}/:
     patch:
@@ -848,6 +1066,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
           description: ''
+  /users/verify-signin-otp/:
+    post:
+      operationId: users_verify_signin_otp_create
+      description: Verify the OTP for a signin attempt and return JWT tokens.
+      summary: Verify signin OTP
+      tags:
+      - Authentication
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifySigninOTPRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VerifySigninOTPRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VerifySigninOTPRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignInResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: ''
   /wallets/admin/update/{id}/:
     put:
       operationId: wallets_admin_update_update
@@ -864,13 +1123,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Wallet'
+              $ref: '#/components/schemas/AdminWalletUpdate'
           application/x-www-form-urlencoded:
             schema:
-              $ref: '#/components/schemas/Wallet'
+              $ref: '#/components/schemas/AdminWalletUpdate'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/Wallet'
+              $ref: '#/components/schemas/AdminWalletUpdate'
+        required: true
       security:
       - jwtAuth: []
       responses:
@@ -878,7 +1138,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Wallet'
+                $ref: '#/components/schemas/AdminWalletUpdate'
           description: ''
     patch:
       operationId: wallets_admin_update_partial_update
@@ -895,13 +1155,13 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PatchedWallet'
+              $ref: '#/components/schemas/PatchedAdminWalletUpdate'
           application/x-www-form-urlencoded:
             schema:
-              $ref: '#/components/schemas/PatchedWallet'
+              $ref: '#/components/schemas/PatchedAdminWalletUpdate'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/PatchedWallet'
+              $ref: '#/components/schemas/PatchedAdminWalletUpdate'
       security:
       - jwtAuth: []
       responses:
@@ -909,7 +1169,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Wallet'
+                $ref: '#/components/schemas/AdminWalletUpdate'
           description: ''
   /wallets/create/:
     post:
@@ -1001,6 +1261,44 @@ paths:
           description: ''
 components:
   schemas:
+    ActionEnum:
+      enum:
+      - approve
+      - reject
+      type: string
+      description: |-
+        * `approve` - approve
+        * `reject` - reject
+    AdminApproveRequest:
+      type: object
+      properties:
+        loan_id:
+          type: integer
+        action:
+          $ref: '#/components/schemas/ActionEnum'
+      required:
+      - action
+      - loan_id
+    AdminWalletUpdate:
+      type: object
+      description: Staff balance correction. Needs a reason and a unique reference.
+      properties:
+        balance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        reason:
+          type: string
+          writeOnly: true
+          maxLength: 255
+        funding_reference:
+          type: string
+          writeOnly: true
+          maxLength: 100
+      required:
+      - balance
+      - funding_reference
+      - reason
     ChangePasswordRequest:
       type: object
       properties:
@@ -1016,15 +1314,68 @@ components:
       - old_password
     Deposit:
       type: object
+      description: Staff-recorded deposit. The funding reference links it to the real
+        payment.
       properties:
+        user_id:
+          type: integer
         amount:
           type: string
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        funding_reference:
+          type: string
+          maxLength: 100
         description:
           type: string
       required:
       - amount
+      - funding_reference
+      - user_id
+    EMIPayResponse:
+      type: object
+      properties:
+        emi_id:
+          type: integer
+        loan_id:
+          type: integer
+          nullable: true
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        transaction_reference:
+          type: string
+      required:
+      - amount
+      - emi_id
+      - loan_id
+      - transaction_reference
+    EMIRead:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        loan:
+          type: integer
+        due_date:
+          type: string
+          format: date
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        paid_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        is_paid:
+          type: boolean
+      required:
+      - due_date
+      - id
+      - loan
     ErrorResponse:
       type: object
       properties:
@@ -1040,6 +1391,80 @@ components:
           format: email
       required:
       - email
+    KYCSubmit:
+      type: object
+      properties:
+        identity_document:
+          type: string
+          format: uri
+        proof_of_address:
+          type: string
+          format: uri
+      required:
+      - identity_document
+      - proof_of_address
+    LoanApplication:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        user:
+          type: integer
+          readOnly: true
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        duration_months:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        status:
+          allOf:
+          - $ref: '#/components/schemas/LoanApplicationStatusEnum'
+          readOnly: true
+        reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - amount
+      - created_at
+      - duration_months
+      - id
+      - status
+      - user
+    LoanApplicationStatusEnum:
+      enum:
+      - pending
+      - approved
+      - rejected
+      type: string
+      description: |-
+        * `pending` - Pending
+        * `approved` - Approved
+        * `rejected` - Rejected
+    LoanApplyRequest:
+      type: object
+      properties:
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        duration_months:
+          type: integer
+          maximum: 60
+          minimum: 1
+        reason:
+          type: string
+      required:
+      - amount
+      - duration_months
     LogoutRequest:
       type: object
       properties:
@@ -1061,6 +1486,22 @@ components:
           type: string
       required:
       - otp
+    PatchedAdminWalletUpdate:
+      type: object
+      description: Staff balance correction. Needs a reason and a unique reference.
+      properties:
+        balance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        reason:
+          type: string
+          writeOnly: true
+          maxLength: 255
+        funding_reference:
+          type: string
+          writeOnly: true
+          maxLength: 100
     PatchedUpdateUser:
       type: object
       properties:
@@ -1090,6 +1531,7 @@ components:
           type: string
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          readOnly: true
     ResetPasswordRequest:
       type: object
       properties:
@@ -1138,16 +1580,40 @@ components:
       - access_token
       - message
       - refresh_token
-    StatusEnum:
-      enum:
-      - pending
-      - successful
-      - failed
-      type: string
-      description: |-
-        * `pending` - Pending
-        * `successful` - Successful
-        * `failed` - Failed
+    SuspiciousActivity:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        transaction:
+          type: integer
+        risk_score:
+          type: number
+          format: double
+        reason:
+          type: string
+        flagged_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - flagged_at
+      - id
+      - reason
+      - risk_score
+      - transaction
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+        refresh:
+          type: string
+      required:
+      - access
+      - refresh
     Transaction:
       type: object
       properties:
@@ -1171,7 +1637,7 @@ components:
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         status:
-          $ref: '#/components/schemas/StatusEnum'
+          $ref: '#/components/schemas/TransactionStatusEnum'
         description:
           type: string
           nullable: true
@@ -1202,13 +1668,16 @@ components:
       - balance
       - message
       - transaction
-    TransactionErrorResponse:
-      type: object
-      properties:
-        error:
-          type: string
-      required:
-      - error
+    TransactionStatusEnum:
+      enum:
+      - pending
+      - successful
+      - failed
+      type: string
+      description: |-
+        * `pending` - Pending
+        * `successful` - Successful
+        * `failed` - Failed
     TransactionTypeEnum:
       enum:
       - deposit
@@ -1219,14 +1688,6 @@ components:
         * `deposit` - Deposit
         * `withdraw` - Withdraw
         * `transfer` - Transfer
-    TransactionValidationErrorResponse:
-      type: object
-      properties:
-        errors:
-          type: object
-          additionalProperties: {}
-      required:
-      - errors
     Transfer:
       type: object
       properties:
@@ -1270,7 +1731,8 @@ components:
         message:
           type: string
         user:
-          $ref: '#/components/schemas/UserProfile'
+          type: object
+          additionalProperties: {}
       required:
       - message
       - user
@@ -1353,7 +1815,6 @@ components:
         bvn:
           type: string
           readOnly: true
-          nullable: true
         role:
           allOf:
           - $ref: '#/components/schemas/RoleEnum'
@@ -1395,6 +1856,17 @@ components:
       required:
       - email
       - otp
+    VerifySigninOTPRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        otp:
+          type: string
+      required:
+      - email
+      - otp
     Wallet:
       type: object
       properties:
@@ -1405,7 +1877,9 @@ components:
           type: string
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          readOnly: true
       required:
+      - balance
       - user
     Withdraw:
       type: object

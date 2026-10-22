@@ -1,47 +1,50 @@
-from .models import User
-from django.db.models.signals import post_save
-from django.dispatch import receiver #receiver helps listens to events and its a decorator
-# from django.core.mail import send_mail
-from utils.mail import send_smtp_mail
-from .models import User
-from wallets.models import Wallet
+import logging
+
 from django.conf import settings
 from django.db import transaction
-import logging
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+from utils.mail import send_smtp_mail
+from wallets.models import Wallet
+
+from .models import User
 
 logger = logging.getLogger(__name__)
 
 
-
 @receiver(post_save, sender=User)
 def send_mail_with_template(sender, instance, created, **kwargs):
+    # Send the welcome email only after the new user is really saved
+    # (on_commit waits until the database transaction has finished)
     if created:
-        transaction.on_commit(lambda: _send_welcome_email(instance))
+        transaction.on_commit(lambda: send_welcome_email(instance))
 
 
-def _send_welcome_email(instance):
-    # A welcome email is a courtesy: if the mail server is unreachable the
-    # account still exists, so log the failure instead of failing sign-up.
+def send_welcome_email(user):
+    # If the email fails, the account still exists, so we just log the
+    # error instead of making the whole sign-up fail.
     try:
         send_smtp_mail(
             subject="Welcome to Vampay.com",
             from_email=settings.DEFAULT_FROM_EMAIL,
-            to=[instance.email],
+            to=[user.email],
             context={
-                "header": f"{instance.first_name} {instance.last_name}",
+                "header": f"{user.first_name} {user.last_name}",
                 "description": "We are glad to have you bank with us.",
                 "extra_info": "Let's get started.",
-                # No button rather than a link to somewhere that doesn't exist.
+                # Only show the button if we have a website to link to
                 "show_button": bool(settings.FRONTEND_URL),
                 "button_text": "Get Started",
                 "button_link": f"{settings.FRONTEND_URL}/onboarding",
-            }
+            },
         )
     except Exception:
-        logger.exception("Welcome email to user %s failed", instance.pk)
+        logger.exception("Welcome email to user %s failed", user.pk)
+
 
 @receiver(post_save, sender=User)
 def create_wallet(sender, instance, created, **kwargs):
-    if created:  # Only create a wallet when a new user is created
-        Wallet.objects.create(user=instance)  # Create wallet for the user
-    
+    # Every new user gets a wallet
+    if created:
+        Wallet.objects.create(user=instance)

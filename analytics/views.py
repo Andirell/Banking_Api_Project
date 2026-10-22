@@ -1,39 +1,55 @@
 from django.utils.dateparse import parse_date
 from rest_framework import generics, permissions
 from rest_framework.exceptions import ValidationError
+
 from .models import SuspiciousActivity
 from .serializers import SuspiciousActivitySerializer
 
+
 class FlaggedTransactionsListAPIView(generics.ListAPIView):
+    # Staff only. Lists flagged transactions, newest first.
+    # Optional filters in the URL:
+    #   ?risk_min=0.5&risk_max=1&from_date=2026-01-01&to_date=2026-01-31
     permission_classes = [permissions.IsAdminUser]
-    # We set serializer and then compute queryset dynamically in get_queryset so
-    # admin users can filter by risk_score and date ranges using query params.
     serializer_class = SuspiciousActivitySerializer
 
     def get_queryset(self):
-        qs = SuspiciousActivity.objects.all().order_by('-flagged_at')
-        # Optional filters: risk_min, risk_max, from_date (YYYY-MM-DD), to_date (YYYY-MM-DD).
-        # A bad value is a client error, not a crash or a silently ignored filter.
-        filters = {
-            "risk_min": ("risk_score__gte", _parse_float),
-            "risk_max": ("risk_score__lte", _parse_float),
-            "from_date": ("flagged_at__date__gte", parse_date),
-            "to_date": ("flagged_at__date__lte", parse_date),
-        }
-        for param, (lookup, parse) in filters.items():
-            raw = self.request.GET.get(param)
-            if raw in (None, ""):
-                continue
-            try:
-                value = parse(raw)
-            except ValueError:
-                value = None
-            if value is None:
-                raise ValidationError({param: f"invalid value {raw!r}"})
-            qs = qs.filter(**{lookup: value})
+        flags = SuspiciousActivity.objects.all().order_by("-flagged_at")
+        params = self.request.GET
 
-        return qs
+        risk_min = params.get("risk_min")
+        if risk_min:
+            flags = flags.filter(risk_score__gte=read_number(risk_min, "risk_min"))
+
+        risk_max = params.get("risk_max")
+        if risk_max:
+            flags = flags.filter(risk_score__lte=read_number(risk_max, "risk_max"))
+
+        from_date = params.get("from_date")
+        if from_date:
+            flags = flags.filter(flagged_at__date__gte=read_date(from_date, "from_date"))
+
+        to_date = params.get("to_date")
+        if to_date:
+            flags = flags.filter(flagged_at__date__lte=read_date(to_date, "to_date"))
+
+        return flags
 
 
-def _parse_float(raw):
-    return float(raw)
+# A bad filter value returns a 400 error instead of crashing or being ignored
+
+def read_number(text, name):
+    try:
+        return float(text)
+    except ValueError:
+        raise ValidationError({name: f"invalid value {text!r}"})
+
+
+def read_date(text, name):
+    try:
+        value = parse_date(text)  # expects YYYY-MM-DD
+    except ValueError:
+        value = None
+    if value is None:
+        raise ValidationError({name: f"invalid value {text!r}"})
+    return value

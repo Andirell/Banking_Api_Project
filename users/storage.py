@@ -5,12 +5,12 @@ from django.core.files.storage import FileSystemStorage
 
 
 class PrivateMediaStorage(FileSystemStorage):
-    """Storage for files that must never be reachable by URL (e.g. KYC documents).
+    # Where KYC documents (ID cards, proof of address) are saved.
+    # These files have NO public URL. The only way to get one is the download
+    # view in users/views.py, which checks it's the owner or staff asking.
 
-    The location is read from settings on each access, so tests can point it at
-    a temporary directory. Serve files only through a view that checks access.
-    """
-
+    # We read the folder from settings every time (instead of once at start-up)
+    # so the tests can point it at a temporary folder.
     @property
     def base_location(self):
         return str(settings.PRIVATE_MEDIA_ROOT)

@@ -1,13 +1,11 @@
 from django.contrib.auth.models import BaseUserManager
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .models import User
 
 
-class UserManager(BaseUserManager["User"]):
+class UserManager(BaseUserManager):
+    # Our users log in with email instead of a username
+
     def get_by_natural_key(self, username):
-        # Emails are stored lowercased; match whatever case the user typed.
+        # Emails are saved in lowercase, so "Ada@Mail.com" still finds "ada@mail.com"
         return self.get(email__iexact=username)
 
     def create_user(self, email, first_name, last_name, password=None, **extra_fields):
@@ -15,12 +13,7 @@ class UserManager(BaseUserManager["User"]):
             raise ValueError("Email is required")
 
         email = self.normalize_email(email)
-        user = self.model(
-            email=email,
-            first_name=first_name,
-            last_name=last_name,
-            **extra_fields
-        )
+        user = self.model(email=email, first_name=first_name, last_name=last_name, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
@@ -35,4 +28,4 @@ class UserManager(BaseUserManager["User"]):
         if extra_fields.get("is_superuser") is not True:
             raise ValueError("Superuser must have is_superuser=True")
 
-        return self.create_user(email=email, first_name=first_name, last_name=last_name, password=password, **extra_fields )
+        return self.create_user(email=email, first_name=first_name, last_name=last_name, password=password, **extra_fields)
