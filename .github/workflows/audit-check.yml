@@ -1,0 +1,21 @@
+name: audit check
+on: push
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - run: pip install pip-audit
+      - run: |
+          pip-audit -r requirements.txt -f json -o audit.json || true
+          python - <<'PY'
+          import json
+          data = json.load(open("audit.json"))
+          for dep in data.get("dependencies", []):
+              for v in dep.get("vulns", []):
+                  print(f"::warning::{dep['name']} {dep['version']} | {v['id']} | fixed in {','.join(v.get('fix_versions', [])) or 'none'} | {(v.get('description') or '')[:150]}")
+          print("::notice::audit done")
+          PY
