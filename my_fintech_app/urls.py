@@ -1,8 +1,10 @@
 from django.conf import settings
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 from drf_spectacular.views import ( SpectacularAPIView, SpectacularSwaggerView )
 from django.http import JsonResponse
+from utils.frontend import frontend_app
+
 
 
 def health_check(request):

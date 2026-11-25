@@ -254,6 +254,15 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+
+# The React app is built into frontend/dist and served by Django, on the same
+# domain as the API. Password reset relies on the session cookie, and browsers
+# can block that cookie when the app and the API are on different sites.
+FRONTEND_BUILD_DIR = BASE_DIR / 'frontend' / 'dist'
+STATICFILES_DIRS = []
+if FRONTEND_BUILD_DIR.exists():
+    STATICFILES_DIRS.append(('app', FRONTEND_BUILD_DIR))
+
 STORAGES = {
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
@@ -300,4 +309,7 @@ CORS_ALLOWED_ORIGINS = (
 "http://localhost:3000",
 "http://localhost:8000")
 
-CSRF_TRUSTED_ORIGINS = ["localhost:3000"]
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
