@@ -57,10 +57,11 @@ Transactions
 POST /transactions/send/ - Transfer money to another user.
 POST /transactions/withdraw/ - Withdraw money from the user's wallet.
 POST /transactions/deposit/ - Deposit money into the user's wallet.
-GET /transactions/history/ - Retrieve transaction history for the logged-in user.
+GET /transactions/ - Retrieve the logged-in user's transactions, sent and received.
 GET /transactions/{id}/ - Retrieve details of a specific transaction.
 
 Loan Management
+GET /loans/ - List the logged-in user's loan applications.
 POST /loans/apply/ - Apply for a loan.
 GET /loans/status/{id}/ - Check the status of a loan application.
 POST /admin/loans/approve/ - Admin approve loan application.
@@ -97,6 +98,18 @@ Install Dependencies
 
 Install the required dependencies using pip:
 pip install -r requirements.txt
+
+Web app
+
+The customer web app is in `frontend/` (React and Vite). Django serves the built app at `/app/`, on the same domain as the API.
+
+Run it locally in two terminals:
+python manage.py runserver
+npm --prefix frontend install && npm --prefix frontend run dev
+
+Then open http://localhost:5173. Vite forwards API calls to Django on port 8000. To try the built version instead, run `npm --prefix frontend run build` and open http://127.0.0.1:8000/app/.
+
+Render builds the app in `build.sh`. Set `NODE_VERSION=22` on the service.
 
 Environment variables
 

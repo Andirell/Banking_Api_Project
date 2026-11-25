@@ -88,12 +88,19 @@ class UserSerializer(serializers.ModelSerializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     # We never send the full BVN back, only the last 4 digits
     bvn = serializers.SerializerMethodField()
+    kyc_documents_submitted = serializers.SerializerMethodField()
 
     @extend_schema_field(OpenApiTypes.STR)
     def get_bvn(self, obj):
         if not obj.bvn:
             return None
         return "*******" + obj.bvn[-4:]
+
+    # kyc_status is "pending" both before and after upload, so the app needs this
+    # to tell "please upload your documents" apart from "waiting for review".
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_kyc_documents_submitted(self, obj):
+        return bool(obj.identity_document and obj.proof_of_address)
 
     class Meta:
         model = User
@@ -109,6 +116,9 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "bvn",
             "role",
             "is_active",
+            "kyc_status",
+            "kyc_rejection_reason",
+            "kyc_documents_submitted",
         )
         read_only_fields = fields
 

@@ -200,3 +200,32 @@ class ReceiverPrivacyAndClosureTests(TestCase):
             self.send("nobody@example.com")
 
         self.assertEqual(self.send("bob@example.com").status_code, 429)
+
+
+class TransactionHistoryTests(TestCase):
+    """B3: history shows money received, and still hides other people's transactions."""
+
+    def setUp(self):
+        cache.clear()
+        self.alice = make_user("alice@example.com", balance="100.00")
+        self.bob = make_user("bob@example.com")
+        self.carol = make_user("carol@example.com")
+        self.alice_client, _ = auth_client(self.alice)
+        res = self.alice_client.post(
+            "/transactions/send/", {"receiver_email": "bob@example.com", "amount": "25.00"}, format="json"
+        )
+        self.transaction_id = res.data["transaction"]["id"]
+
+    def test_sender_and_receiver_both_see_the_transfer(self):
+        bob_client, _ = auth_client(self.bob)
+
+        for client in (self.alice_client, bob_client):
+            res = client.get("/transactions/")
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual([tx["id"] for tx in res.data], [self.transaction_id])
+
+    def test_other_users_cannot_see_the_transfer(self):
+        carol_client, _ = auth_client(self.carol)
+
+        self.assertEqual(carol_client.get("/transactions/").data, [])
+        self.assertEqual(carol_client.get(f"/transactions/{self.transaction_id}/").status_code, 404)

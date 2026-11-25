@@ -4,6 +4,8 @@
 .env
 .remove_anti_fraud_marker
 __pycache__/
+frontend/node_modules/
+frontend/dist/
 # Secrets, user uploads and local data must never be committed
 .dev_secret_key
 db.sqlite3

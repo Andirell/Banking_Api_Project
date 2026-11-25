@@ -14,6 +14,15 @@ jobs:
         with:
           python-version-file: .python-version
           cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the frontend
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+      - name: Known vulnerabilities in frontend dependencies
+        run: npm --prefix frontend audit --omit=dev
       - run: pip install -r requirements.txt pip-audit
       - name: Tests
         run: python manage.py test

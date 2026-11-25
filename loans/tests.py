@@ -181,3 +181,17 @@ class LoanAdminInputTests(TestCase):
         res = client.post("/loans/admin/approve/", {"loan_id": "abc", "action": "approve"}, format="json")
 
         self.assertEqual(res.status_code, 400)
+
+
+class MyLoansTests(TestCase):
+    def test_lists_only_your_own_loans(self):
+        me = make_user("me@example.com")
+        other = make_user("other@example.com")
+        mine = LoanApplication.objects.create(user=me, amount=Decimal("100.00"), duration_months=2)
+        LoanApplication.objects.create(user=other, amount=Decimal("200.00"), duration_months=2)
+        client, _ = auth_client(me)
+
+        res = client.get("/loans/")
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual([loan["id"] for loan in res.data], [mine.pk])

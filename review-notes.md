@@ -188,6 +188,7 @@ Still open from the first review: rotate `SECRET_KEY` on Render (owner action).
 Also fixed while here:
 - `analytics/` had no `__init__.py`, so the full test run silently skipped its tests.
 - Rate-limit counters were in each worker's memory, so Render's 4 gunicorn workers each allowed the full limit (seen live: about 4× more requests got through). Production now uses Django's database cache, shared by every worker; `build.sh` creates its table. Tests: `users.tests.SharedRateLimitTests`.
+- (2026-11-05) B3: transaction history now includes transfers the user received. Tests: `transactions.tests.TransactionHistoryTests`.
 - (2026-10-15) Emails are case-insensitive and stored lowercase.
 - (2026-10-15) Swagger (`/api/docs/`) is off in production unless `API_DOCS_PUBLIC=true`.
 - (2026-10-15) `logout` only accepts your own refresh token.

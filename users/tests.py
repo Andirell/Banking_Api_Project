@@ -937,3 +937,36 @@ class SharedRateLimitTests(TestCase):
         )
 
         self.assertEqual(out.stdout.strip(), "django.core.cache.backends.db.DatabaseCache", out.stderr)
+
+
+class ProfileKYCFieldsTests(TestCase):
+    def test_profile_reports_kyc_progress(self):
+        user = make_user("kyc-profile@example.com", kyc_status="rejected", kyc_rejection_reason="Blurry photo")
+        client, _ = auth_client(user)
+
+        res = client.get("/users/me/")
+
+        self.assertEqual(res.data["kyc_status"], "rejected")
+        self.assertEqual(res.data["kyc_rejection_reason"], "Blurry photo")
+        self.assertFalse(res.data["kyc_documents_submitted"])
+
+
+class FrontendAppTests(TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.build_dir = Path(self._tmp.name)
+
+    def test_serves_the_app_with_a_content_security_policy(self):
+        (self.build_dir / "index.html").write_text("<title>Test app</title>")
+
+        with self.settings(FRONTEND_BUILD_DIR=self.build_dir):
+            res = self.client.get("/app/")
+
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "Test app")
+        self.assertIn("default-src 'self'", res["Content-Security-Policy"])
+
+    def test_missing_build_returns_404(self):
+        with self.settings(FRONTEND_BUILD_DIR=self.build_dir):
+            self.assertEqual(self.client.get("/app/").status_code, 404)

@@ -66,6 +66,15 @@ class LoanApplyAPIView(generics.CreateAPIView):
         return Response(LoanApplicationSerializer(loan).data, status=status.HTTP_201_CREATED)
 
 
+class MyLoansAPIView(generics.ListAPIView):
+    """List the authenticated user's own loan applications."""
+    serializer_class = LoanApplicationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return LoanApplication.objects.filter(user=self.request.user).order_by('-created_at')
+
+
 class LoanStatusAPIView(generics.RetrieveAPIView):
     serializer_class = LoanApplicationSerializer
     permission_classes = [permissions.IsAuthenticated]

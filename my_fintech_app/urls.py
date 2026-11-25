@@ -1,8 +1,8 @@
 from django.conf import settings
 from django.contrib import admin
+from django.urls import path, include
+from drf_spectacular.views import ( SpectacularAPIView, SpectacularSwaggerView )
 from django.http import JsonResponse
-from django.urls import include, path
-from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 
 def health_check(request):
@@ -19,6 +19,7 @@ urlpatterns = [
     path("analytics/", include("analytics.urls")),
     path("loans/", include("loans.urls")),
     path("wallets/", include("wallets.urls")),
+    re_path(r"^app(/.*)?$", frontend_app, name="frontend_app"),
 ]
 
 # The API docs list every endpoint, so in production they are only shown

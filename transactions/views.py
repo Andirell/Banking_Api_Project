@@ -10,8 +10,8 @@ from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 from rest_framework.viewsets import ReadOnlyModelViewSet
-
-from analytics.utils import flag_transaction_safely
+from django.db import IntegrityError, transaction as db_transaction
+from django.conf import settings
 from users.models import User
 from users.permissions import IsKYCVerified
 from utils.schemas import ErrorResponse, TransactionActionResponse, ValidationErrorResponse
@@ -234,4 +234,5 @@ class TransactionViewSet(ReadOnlyModelViewSet):
     lookup_field = "pk"
 
     def get_queryset(self):
-        return Transaction.objects.filter(sender=self.request.user).order_by("-created_at")
+        user = self.request.user
+        return Transaction.objects.filter(sender=user).order_by('-created_at')

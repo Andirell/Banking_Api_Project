@@ -11,8 +11,8 @@ class WalletSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Wallet
+        # Balance is read-only for non-admin users; admins should use AdminWalletUpdateSerializer
         fields = ["user", "balance"]
-        # Customers can never change their balance through this serializer
         read_only_fields = ["balance"]
 
 
